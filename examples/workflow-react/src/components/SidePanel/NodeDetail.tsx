@@ -1,5 +1,5 @@
 import { useGraph } from '@/context/graph-context'
-import { type NodeInstanceType } from 'workflow-core'
+import { type NodeInstanceType } from "@bpgraph/workflow-core"
 import { useEffect, useState } from 'react'
 
 export default function NodeDetail({ node, onClose }: { node: NodeInstanceType, onClose: () => void }) {

@@ -1,5 +1,5 @@
 import { useGraph } from "@/context/graph-context"
-import { type NodeInstanceType } from 'workflow-core'
+import { type NodeInstanceType } from "@bpgraph/workflow-core"
 
 export function NodeListMenu({ onClose, onHide }: { onClose: () => void, onHide: () => void }) {
   const graph = useGraph()

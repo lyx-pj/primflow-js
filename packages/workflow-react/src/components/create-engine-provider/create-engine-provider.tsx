@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react'
-import { Engine, type Runtime, type NodeClassType, type ProcessOptions } from 'workflow-core/engine'
+import { Engine, type Runtime, type NodeClassType, type ProcessOptions } from '@bpgraph/workflow-core/engine'
 
 export type EngineProviderProps<NodeDefs extends Record<string, NodeClassType>> = {
   runtime: Runtime<NodeDefs>

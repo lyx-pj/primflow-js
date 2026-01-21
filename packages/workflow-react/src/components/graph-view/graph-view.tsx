@@ -1,5 +1,5 @@
 // import { GraphContext } from '@/context/graph-context'
-import { type NodeInstanceType, type LinkInstanceType, Graph, type NodeClassType } from 'workflow-core'
+import { type NodeInstanceType, type LinkInstanceType, Graph, type NodeClassType } from '@bpgraph/workflow-core'
 import { useRef, useEffect, useMemo } from 'react'
 
 export type GraphViewProps<NodeDefs extends Record<string, NodeClassType>> = {

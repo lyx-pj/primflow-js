@@ -1,5 +1,5 @@
 {
-  "name": "workflow-core",
+  "name": "@bpgraph/workflow-core",
   "version": "0.0.6",
   "private": false,
   "type": "module",

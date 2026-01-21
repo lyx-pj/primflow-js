@@ -1,5 +1,5 @@
-import { type ExecutorFn } from 'workflow-core/engine'
-import { Node } from 'workflow-core'
+import type { ExecutorFn } from '@bpgraph/workflow-core/engine'
+import { Node } from '@bpgraph/workflow-core'
 
 function getOpenRouterApiKey() {
   return localStorage.getItem('openrouter_API_KEY') || ''

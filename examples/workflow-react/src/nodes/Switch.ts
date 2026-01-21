@@ -1,5 +1,5 @@
-import { Node } from 'workflow-core'
-import type { ExecutorFn } from 'workflow-core/engine'
+import { Node } from '@bpgraph/workflow-core'
+import type { ExecutorFn } from '@bpgraph/workflow-core/engine'
 
 export class Switch extends Node {
   static definition = {

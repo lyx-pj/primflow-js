@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { NodeInstanceType } from "workflow-core"
+import type { NodeInstanceType } from "@bpgraph/workflow-core"
 
 type MenuType = "nodeList" | "context" | null
 

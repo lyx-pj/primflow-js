@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react'
-import { Graph, type NodeRegistry, type GraphOptions, type NodeClassType } from 'workflow-core'
+import { Graph, type NodeRegistry, type GraphOptions, type NodeClassType } from '@bpgraph/workflow-core'
 
 export function createGraphContext<NodeDefs extends Record<string, NodeClassType>>(
   registry: NodeRegistry<NodeDefs>,

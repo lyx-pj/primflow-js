@@ -35,7 +35,7 @@ function runBuild(pkg: string) {
 }
 
 async function runBuilds() {
-  const coreIndex = packages.indexOf('workflow-core');
+  const coreIndex = packages.indexOf('@bpgraph/workflow-core');
   if (coreIndex !== -1) {
     const corePkg = packages.splice(coreIndex, 1)[0];
     await runBuild(corePkg);

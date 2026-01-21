@@ -1,5 +1,5 @@
-import { NodeRegistry } from 'workflow-core'
-import { Runtime } from 'workflow-core/engine'
+import { NodeRegistry } from '@bpgraph/workflow-core'
+import { Runtime } from '@bpgraph/workflow-core/engine'
 import { IF } from './IF'
 import { Switch } from './Switch'
 import { Print } from './Print'

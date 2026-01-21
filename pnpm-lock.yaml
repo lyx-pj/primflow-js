@@ -98,6 +98,12 @@ importers:
 
   examples/workflow-react:
     dependencies:
+      '@bpgraph/workflow-core':
+        specifier: workspace:^0.0.0
+        version: link:../../packages/workflow-core
+      '@bpgraph/workflow-react':
+        specifier: workspace:^0.0.0
+        version: link:../../packages/workflow-react
       '@google/genai':
         specifier: ^1.20.0
         version: 1.20.0
@@ -113,12 +119,6 @@ importers:
       tailwindcss:
         specifier: ^4.1.13
         version: 4.1.13
-      workflow-core:
-        specifier: workspace:^0.0.0
-        version: link:../../packages/workflow-core
-      workflow-react:
-        specifier: workspace:^0.0.0
-        version: link:../../packages/workflow-react
       zustand:
         specifier: ^5.0.8
         version: 5.0.8(@types/react@19.1.10)(react@19.1.1)
@@ -178,6 +178,9 @@ importers:
 
   packages/workflow-react:
     dependencies:
+      '@bpgraph/workflow-core':
+        specifier: workspace:^
+        version: link:../workflow-core
       lucide-react:
         specifier: ^0.544.0
         version: 0.544.0(react@19.1.1)
@@ -187,9 +190,6 @@ importers:
       react-dom:
         specifier: ^19.1.1
         version: 19.1.1(react@19.1.1)
-      workflow-core:
-        specifier: workspace:^
-        version: link:../workflow-core
     devDependencies:
       '@types/react':
         specifier: ^19.1.10

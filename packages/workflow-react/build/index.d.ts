@@ -1,15 +1,15 @@
 import { default as default_2 } from 'react';
-import { Engine } from '../../../../bpgraph-core/src/engine';
-import { Graph } from '../../../../bpgraph-core/src';
-import { GraphOptions } from '../../../../bpgraph-core/src';
+import { Engine } from '@bpgraph/workflow-core/engine';
+import { Graph } from '@bpgraph/workflow-core';
+import { GraphOptions } from '@bpgraph/workflow-core';
 import { JSX } from 'react/jsx-runtime';
-import { LinkInstanceType } from '../../../../bpgraph-core/src';
-import { NodeClassType } from '../../../../bpgraph-core/src';
-import { NodeClassType as NodeClassType_2 } from '../../../../bpgraph-core/src/engine';
-import { NodeInstanceType } from '../../../../bpgraph-core/src';
-import { NodeRegistry } from '../../../../bpgraph-core/src';
-import { ProcessOptions } from '../../../../bpgraph-core/src/engine';
-import { Runtime } from '../../../../bpgraph-core/src/engine';
+import { LinkInstanceType } from '@bpgraph/workflow-core';
+import { NodeClassType } from '@bpgraph/workflow-core';
+import { NodeClassType as NodeClassType_2 } from '@bpgraph/workflow-core/engine';
+import { NodeInstanceType } from '@bpgraph/workflow-core';
+import { NodeRegistry } from '@bpgraph/workflow-core';
+import { ProcessOptions } from '@bpgraph/workflow-core/engine';
+import { Runtime } from '@bpgraph/workflow-core/engine';
 
 export declare function createEngineContext<NodeDefs extends Record<string, NodeClassType_2>>(runtime: Runtime<NodeDefs>, options?: ProcessOptions): {
     EngineProvider: ({ children }: {

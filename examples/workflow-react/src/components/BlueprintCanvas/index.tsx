@@ -1,10 +1,10 @@
 
-import { GraphView } from 'workflow-react'
+import { GraphView } from '@bpgraph/workflow-react'
 import { useBlueprintStore } from '@/store/useBlueprintStore'
 
 import { MenuContainer } from "@/components/Menu/MenuContainer"
 import { useEffect, useRef } from 'react'
-import type { JsonGraph, NodeInstanceType } from 'workflow-core'
+import type { JsonGraph, NodeInstanceType } from '@bpgraph/workflow-core'
 import { useGraph } from '@/context/graph-context'
 import { SidePanel } from '../SidePanel'
 import { useEngine } from '@/context/engine-context'
