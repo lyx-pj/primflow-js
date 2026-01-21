@@ -1,7 +1,7 @@
 {
-  "name": "bpgraph",
+  "name": "workflow-monorepo",
   "private": true,
-  "version": "0.0.4",
+  "version": "0.0.1",
   "workspaces": [
     "packages/*",
     "examples/*"

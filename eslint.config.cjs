@@ -44,7 +44,7 @@ module.exports = tseslint.config(
   // React
   {
     ...baseConfig,
-    files: ['packages/bpgraph-react/**/*.{ts,tsx}'],
+    files: ['packages/workflow-react/**/*.{ts,tsx}'],
     languageOptions: { 
       parserOptions: { ...tsParserOptions, extraFileExtensions: ['.tsx'] },
     },
