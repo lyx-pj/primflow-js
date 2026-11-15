@@ -14,6 +14,22 @@ This application demonstrates how to integrate the libraries; it is not a standa
 
 The example follows the browser language: `packages/workflow/i18n.ts` reads `navigator.language` / `navigator.languages` and uses the first supported language to localize page copy, the node palette and definitions, toolbar actions, and the built-in canvas UI (through `GraphOptions.language`). Unsupported languages fall back to English. There is no in-app language switcher, and language only affects display, not protocol values or saved graph data.
 
+## GitHub Pages
+
+The repository's [Pages workflow](../../.github/workflows/pages.yml) builds and deploys this example on pushes to `main`. It can also be run manually from the Actions tab. In the repository's **Settings → Pages → Build and deployment**, select **GitHub Actions** as the source before the first deployment. No `gh-pages` branch is required: Actions uploads the generated files directly to Pages.
+
+The workflow builds the libraries and checks package boundaries with `pnpm build`, then builds the example with `--base=/workflow-js/` and publishes `examples/workflow-react/dist`. The base path matches the repository's Pages URL, [https://lyx-pj.github.io/workflow-js/](https://lyx-pj.github.io/workflow-js/); update it when changing the repository name or using a custom domain. A failed build prevents deployment.
+
+To validate the same build locally, run from the repository root:
+
+```sh
+pnpm build
+pnpm --filter workflow-react-example build --base=/workflow-js/
+pnpm --filter workflow-react-example preview --base=/workflow-js/
+```
+
+Open `/workflow-js/` on the preview server. Workflows remain stored in each visitor's browser through IndexedDB; Pages does not provide shared server storage.
+
 ## Code structure
 
 `src/App.tsx` directly composes `GraphProvider`, `EngineProvider`, and `GraphView` with a minimal canvas layout.

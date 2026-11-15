@@ -14,6 +14,22 @@ pnpm dev
 
 示例按浏览器语言选择简体中文或英文：`packages/workflow/i18n.ts` 读取 `navigator.language` / `navigator.languages`，用首个受支持的语言决定页面文案、节点目录、节点定义、工具栏和画布内置 UI（通过 `GraphOptions.language`）。不支持的语言回退英文；页面不提供语言切换入口，语言只影响展示，不改协议值或已保存的图数据。
 
+## GitHub Pages
+
+仓库的 [Pages 工作流](../../.github/workflows/pages.yml) 在推送到 `main` 时构建并部署此示例，也可以在 Actions 页面手动运行。首次部署前，在仓库的 **Settings → Pages → Build and deployment** 中将来源选为 **GitHub Actions**。无需创建 `gh-pages` 分支，Actions 会将生成文件直接上传给 Pages。
+
+工作流先通过 `pnpm build` 构建库并检查包边界，再用 `--base=/workflow-js/` 构建示例，发布 `examples/workflow-react/dist`。基础路径对应仓库的 Pages 地址 [https://lyx-pj.github.io/workflow-js/](https://lyx-pj.github.io/workflow-js/)；修改仓库名或使用自定义域名时，需要同步调整。构建失败时不会发布。
+
+在仓库根目录运行以下命令，可在本地验证同样的构建：
+
+```sh
+pnpm build
+pnpm --filter workflow-react-example build --base=/workflow-js/
+pnpm --filter workflow-react-example preview --base=/workflow-js/
+```
+
+打开预览服务的 `/workflow-js/` 路径。工作流仍通过 IndexedDB 保存在各位访问者自己的浏览器中，Pages 不提供共享的服务器存储。
+
 ## 代码结构
 
 `src/App.tsx` 直接组合 `GraphProvider`、`EngineProvider` 和 `GraphView`，保留最少的画布布局。

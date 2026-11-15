@@ -1,0 +1,51 @@
+name: 部署示例到 GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '12.18.0'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 构建库并验证包边界
+        run: pnpm build
+
+      - name: 构建示例
+        run: pnpm --filter workflow-react-example build --base=/workflow-js/
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: examples/workflow-react/dist
+
+      - name: 发布页面
+        id: deployment
+        uses: actions/deploy-pages@v5
