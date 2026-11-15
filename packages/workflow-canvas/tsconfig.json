@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "moduleDetection": "force",
+    "rootDir": "src",
+    "outDir": "build/types",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "sourceMap": true
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../workflow-model"
+    }
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build",
+    "tests",
+    "**/*.test.ts"
+  ]
+}

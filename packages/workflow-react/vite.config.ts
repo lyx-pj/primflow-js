@@ -30,7 +30,9 @@ export default defineConfig({
     },
     outDir: 'build',
     rollupOptions: {
-      external: ['react', 'react-dom', 'workflow-core', 'workflow-core/engine'],
+      // Use regexes to cover package subpaths such as /engine and react/jsx-runtime.
+      // Missing a subpath would inline dependencies and duplicate runtime classes.
+      external: [/^react($|\/)/, /^react-dom($|\/)/, /^@lyx-pj\/workflow-(model|engine|canvas)($|\/)/],
     },
   },
 })

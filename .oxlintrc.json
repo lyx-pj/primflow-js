@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "browser": true
+  },
+  "ignorePatterns": ["**/node_modules/**", "**/build/**", "**/dist/**", "packages/*/tests/**", "packages/**/*.test.ts"],
+  "overrides": [
+    {
+      "files": ["packages/workflow-react/**/*.{ts,tsx}", "examples/workflow-react/**/*.{ts,tsx}"],
+      "rules": {
+        "react/rules-of-hooks": "error",
+        "react/exhaustive-deps": "warn",
+        "react/only-export-components": "warn",
+        "react/refs": "off",
+        "react/globals": "off",
+        "react/set-state-in-effect": "off"
+      }
+    },
+    {
+      "files": ["examples/workflow-react/**/*.{ts,tsx}"],
+      "rules": {
+        "react/only-export-components": ["warn", { "allowConstantExport": true }]
+      }
+    }
+  ]
+}

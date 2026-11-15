@@ -13,6 +13,10 @@ node_modules/
 dist/
 dist-ssr/
 
+# 包的构建产物，由 pnpm build 生成，不入库
+build/
+*.tsbuildinfo
+
 *.local
 
 # Editor directories and files
@@ -27,3 +31,6 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# AI 协作导航文件，仅本地保留
+**/AGENTS.md

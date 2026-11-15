@@ -1,23 +1,22 @@
-#!/bin/bash
+#!/usr/bin/env sh
 
-set -e
+# Husky 使用 sh 启动钩子，显式交给 Bash 执行数组和进程替换语法。
+bash -e <<'BASH'
 
-FILES=$(git diff --cached --name-only -z)
+JS_FILES=()
+# 保留 NUL 分隔，避免带空格的文件名被拆开；删除的文件不参与检查。
+while IFS= read -r -d '' file; do
+  case "$file" in
+    *.js|*.jsx|*.ts|*.tsx|*.mjs|*.cjs) JS_FILES+=("$file") ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
-JS_FILES=$(printf '%s' "$FILES" | tr '\0' '\n' | grep -E "^packages/.*/.*\.(ts|tsx|vue)$" || true)
-CSS_FILES=$(printf '%s' "$FILES" | tr '\0' '\n' | grep -E "^packages/.*/.*\.(css|vue)$" || true)
-
-if [ -n "$JS_FILES" ]; then
-  echo "$JS_FILES" | xargs npx eslint --fix -f unix
+if [ "${#JS_FILES[@]}" -gt 0 ]; then
+  pnpm exec oxlint --config .oxlintrc.json --deny-warnings --no-error-on-unmatched-pattern --fix "${JS_FILES[@]}"
 fi
 
-if [ -n "$CSS_FILES" ]; then
-  echo "$CSS_FILES" | xargs npx stylelint --fix --formatter string
-fi
-
-CHANGED_PACKAGES=$(git diff --cached --name-only | grep '^packages/' | awk -F/ '{print $2}' | sort | uniq)
-for pkg in $CHANGED_PACKAGES; do
-  PKG_JSON="packages/$pkg/package.json"
+while IFS= read -r pkg; do
+  PKG_JSON="$pkg/package.json"
   if [ -f "$PKG_JSON" ]; then
     PKG_NAME=$(jq -r '.name' "$PKG_JSON")
     HAS_TEST=$(jq -r '.scripts.test // empty' "$PKG_JSON")
@@ -25,4 +24,5 @@ for pkg in $CHANGED_PACKAGES; do
       pnpm --filter "$PKG_NAME" test
     fi
   fi
-done
+done < <(git diff --cached --name-only --diff-filter=ACMR | awk -F/ '/^(packages|examples)\// {print $1 "/" $2}' | sort -u)
+BASH

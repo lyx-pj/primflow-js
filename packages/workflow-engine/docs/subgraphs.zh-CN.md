@@ -1,0 +1,48 @@
+# 子图参数
+
+[English](subgraphs.md) | 简体中文
+
+普通子图用 `Start` 接收参数、用 `End` 返回结果，父图中的子图节点负责调用它。JSON 结构和 `Start` 端口规则见 [model 子图数据与端口](../../workflow-model/docs/subgraphs.zh-CN.md)；循环体使用另一套 [循环执行](loops.zh-CN.md) 规则。
+
+## 参数怎样传入和返回
+
+| 位置 | 作用 |
+| --- | --- |
+| 父图的子图节点 | 输入端口接收参数，输出端口提供返回值 |
+| 子图 `Start` | 接收参数，再从同名输出端口传给内部节点 |
+| 子图 `End` | 接收内部计算结果，返回给父图 |
+
+引擎按端口名配对。例如父图和 `Start` 都有名为 `text` 的数据输入，就把父图的 `text` 传入子图。名称匹配后，如果两边各只剩一个数据端口，即使名称不同也可以配对。
+
+配对时还遵循这些规则：
+
+- 类型相同，或任一侧是 `any`，才赋值。
+- 值为 `undefined` 且目标类型不是 `any` 时跳过。
+- `exec` 和 `spacer` 不传递参数。
+- 无法匹配的参数跳过，不会因此中断执行。
+
+子图 `End` 的结果先写入父图子图节点的输出，再执行父图的后续节点。实现见 [SubgraphParams.ts](../src/SubgraphParams.ts)。
+
+## 循环体内调用
+
+循环体调用普通子图时，参数规则相同，数据仍按当前轮次分开保存。循环体入口是 `LoopEntry` 而不是 `Start`，循环入口不参与参数配对。
+
+## 应用需要做什么
+
+引擎不读取浏览器存储，只接收已经准备好的完整图。执行前，应用需要加载所有被引用的独立子图文件（包括子图内部引用的文件），再交给引擎；文件缺失或相互循环引用时由应用阻止启动。
+
+独立子图的保存结构与引擎的内嵌执行图不同：应用不要把运行时的递归组装结果写回源文件。示例的组装与文件流程见 [示例内部 workflow 模块](../../../examples/workflow-react/packages/workflow/README.zh-CN.md)，画布进入与返回见 [canvas 子图与导航](../../workflow-canvas/docs/subgraphs.zh-CN.md)。
+
+## 限制
+
+参数端口通过节点的 `inputs` / `outputs` 配置，没有可视化端口编辑；参数不匹配时跳过，没有专门的界面错误提示。
+
+## 代码和测试
+
+- [SubgraphParams.ts](../src/SubgraphParams.ts)：子图参数的传入和返回。
+- [engine.test.ts](../tests/engine.test.ts)：参数传入、结果返回、按名称或剩余单个端口配对。
+- [subgraphs.test.ts](../../../examples/workflow-react/tests/subgraphs.test.ts)：加载引用文件，检查缺失文件与循环引用。
+
+```sh
+pnpm --filter @lyx-pj/workflow-engine exec vitest run tests/engine.test.ts
+```

@@ -1,94 +1,92 @@
-# @bpgraph/workflow-react
+# @lyx-pj/workflow-react
 
-**@bpgraph/workflow-react** is a lightweight React wrapper built on top of **@bpgraph/workflow-core**.  
-It provides convenient components and context utilities to simplify graph rendering and management within React applications.
+English | [简体中文](README.zh-CN.md)
 
----
+Use the canvas and engine in React applications. This package provides `GraphProvider`, `EngineProvider`, and `GraphView` to manage mounting and unmounting. Menus, node panels, and the debug panel come from [canvas](../workflow-canvas/README.md); the application handles file storage and execution controls.
 
-## Overview
-
-This package offers two main features:
-
-1. **Graph Context** – a React context to easily manage and access a shared graph instance.  
-2. **GraphView Component** – a React component for displaying and interacting with the graph.
-
----
-
-## Graph Context
-
-You can create a graph context using the `createGraphContext` function.  
-It sets up a provider and a custom hook for accessing the graph instance anywhere in your React component tree.
-
-### Example
-
-```ts
-// context/graph-context.ts
-import { createGraphContext } from '@bpgraph/workflow-react'
-
-const registry = createRegistry()
-
-const graphOptions = {
-  background: '#000000',
-  gridSize: 10,
-  drawGrid: {
-    size: 10,
-    color: 'rgba(255, 255, 255, 0.2)',
-    thickness: 1,
-  },
-}
-
-export const { GraphProvider, useGraph } = createGraphContext(registry, graphOptions)
-```
-
----
-
-## Usage
-
-Wrap your application (or any part of it) with the `GraphProvider`.  
-Then, use the `useGraph()` hook to access the graph instance and the `GraphView` component to render it.
-
-### Example
+## Mount the canvas
 
 ```tsx
-// App.tsx
-import { GraphProvider, useGraph } from './context/graph-context'
-import { GraphView } from '@bpgraph/workflow-react'
+import { NodeRegistry } from '@lyx-pj/workflow-canvas'
+import { createGraphContext, GraphView } from '@lyx-pj/workflow-react'
 
-const App = () => {
+const registry = new NodeRegistry()
+const { GraphProvider, useGraph } = createGraphContext(registry, {
+  background: '#18181b',
+  gridSize: 10,
+})
+
+function Editor() {
+  const graph = useGraph()
+  return <GraphView graph={graph} height={480} />
+}
+
+export default function App() {
   return (
     <GraphProvider>
-      <Component />
+      <Editor />
     </GraphProvider>
   )
 }
-
-const Component = () => {
-  const graph = useGraph()
-
-  return (
-    <div>
-      <GraphView />
-    </div>
-  )
-}
 ```
 
----
+- `createGraphContext` takes a node registry and canvas options, returning `GraphProvider` and `useGraph`.
+- `GraphView` requires an explicit `graph` prop; it does not read a Context you created yourself.
+- The container needs a defined height. `GraphView` defaults to `height="100%"`, which requires a parent with a computable height.
 
-## API
+This example mounts only the editor. Add the engine when you need workflow execution.
 
-### `createGraphContext(registry, options)`
-Creates a React context for your graph instance.
+## Connect the engine
 
-- **Parameters:**
-  - `registry`: The node and edge registry from `@bpgraph/workflow-core`.
-  - `options`: Configuration object for initializing the graph (e.g., grid, background color).
+```ts
+import { NodeRegistry, Runtime } from '@lyx-pj/workflow-engine'
+import { createEngineContext } from '@lyx-pj/workflow-react'
 
-- **Returns:**
-  - `GraphProvider`: React component that provides the graph context.
-  - `useGraph()`: Hook for accessing the graph instance.
+const runtime = new Runtime(new NodeRegistry())
+export const { EngineProvider, useEngine } = createEngineContext(runtime)
+```
 
----
+Wrap components that need execution with `EngineProvider`. Children use `useEngine()` to access the same engine instance. The canvas and engine must register the same custom node types.
+
+The application connects them: read `graph.toJSON()`, assemble standalone subgraphs, call `engine.fromJSON()` and `engine.process({ debug })`, and convert engine events into canvas display states. See the [example's events.ts](../../examples/workflow-react/packages/workflow/events.ts) for a complete integration.
+
+`EngineProvider` does not automatically execute workflows or display execution states on the canvas.
+
+## API and lifecycle
+
+| API | Purpose |
+| --- | --- |
+| `createGraphContext(registry, options?)` | Create `GraphProvider` and `useGraph`, with canvas options specified at creation |
+| `createEngineContext(runtime, options?)` | Create `EngineProvider` and `useEngine` |
+| `GraphView` | Mount the canvas; accepts `graph`, dimensions, className, event callbacks, and view options |
+
+- Provider instances stay stable across renders. Do not repeatedly call `createGraphContext` / `createEngineContext` inside component render functions.
+- `useGraph()` / `useEngine()` must run within the corresponding Provider or they throw.
+- `EngineProvider` calls `engine.stop()` on unmount. Use `engine.whenStopped()` when asynchronous resource cleanup must finish.
+- `GraphView` reads the latest callbacks when events fire, avoiding stale props.
+- Factory options apply only when creating instances. Use `graph.setOptions()` for later configuration changes.
+- `GraphView` passes view options to the mounting process; changing a prop does not guarantee instance reconstruction.
+
+`GraphView` supports callbacks such as `onNodeClick`, `onNodeDoubleClick`, `onNodeSelection`, and `onBlankClick`. See [GraphViewProps](src/components/graph-view/graph-view.tsx) for all props. Use Graph APIs for port and canvas interactions without manipulating JointJS directly.
+
+## Build
+
+Consumers install canvas, engine, and React. This package keeps them external during bundling to avoid duplicate node classes.
+
+`pnpm build` checks package boundaries. See [React integration](docs/adapter-contract.md) for the rules and [verify-boundaries.mjs](../../scripts/verify-boundaries.mjs) for the checks.
+
+## Development and tests
+
+Run from the repository root:
+
+```sh
+pnpm --filter @lyx-pj/workflow-react test
+pnpm --filter @lyx-pj/workflow-react typecheck
+pnpm --filter @lyx-pj/workflow-react lint
+```
+
+The existing [index.test.ts](tests/index.test.ts) covers instance stability in Strict Mode and engine cleanup on unmount. Add corresponding tests for new interactions. Run the root `pnpm build` when changing bundling or public exports.
 
 ## License
-MIT © bpgraph
+
+MIT
