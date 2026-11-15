@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 A visual programming toolkit built around nodes and connections. A single graph definition connects editing, execution, and debugging, making the toolkit suitable for embedded workflow editors, data processing tools, and AI workflow applications. The repository contains four libraries and a runnable React example.
 
+Try the [live React example](https://lyx-pj.github.io/workflow-js/).
+
 ## Packages and capabilities
 
 | Package | Purpose | Documentation |
