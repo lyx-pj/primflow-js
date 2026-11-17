@@ -31,6 +31,7 @@ build/
 *.njsproj
 *.sln
 *.sw?
+.npmrc
 
 # AI 协作导航文件，仅本地保留
 **/AGENTS.md
