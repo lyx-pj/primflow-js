@@ -17,7 +17,39 @@ Try the [live React example](https://lyx-pj.github.io/workflow-js/).
 
 ## Quick start
 
-Install Node.js and pnpm first.
+Install the packages in an existing React 18 or 19 project:
+
+```bash
+npm install @lyx-pj/workflow-react @lyx-pj/workflow-canvas @lyx-pj/workflow-engine
+```
+
+Add the following to `App.tsx` to mount an editor:
+
+```tsx
+import { NodeRegistry } from '@lyx-pj/workflow-canvas'
+import { createGraphContext, GraphView } from '@lyx-pj/workflow-react'
+
+const { GraphProvider, useGraph } = createGraphContext(new NodeRegistry())
+
+function Editor() {
+  const graph = useGraph()
+  return <GraphView graph={graph} height={480} />
+}
+
+export default function App() {
+  return (
+    <GraphProvider>
+      <Editor />
+    </GraphProvider>
+  )
+}
+```
+
+This example mounts the editor. See the [React guide](packages/workflow-react/README.md) to register custom nodes and connect workflow execution. For execution without a UI, use [engine](packages/workflow-engine/README.md) directly.
+
+## Run the repository example
+
+After cloning the repository, install Node.js and pnpm, then run:
 
 ```bash
 pnpm install
@@ -47,22 +79,8 @@ See [Architecture](docs/architecture.md) for module responsibilities, terminolog
 | `pnpm build:all`                    | Build the entire workspace, including the example                                          |
 | `pnpm typecheck`                    | Check TypeScript types throughout the repository                                           |
 | `pnpm lint` / `pnpm test`           | Lint code / run tests                                                                      |
-| `pnpm test:release`                 | Run release regression tests without publishing packages                                   |
-| `pnpm release`                      | Validate, update versions, build, publish npm packages, and push Git                       |
 | `pnpm format` / `pnpm format:check` | Format files / check formatting                                                            |
 | `pnpm clean`                        | Remove build output                                                                        |
-
-## Publishing
-
-Commit or stash workspace changes first, and ensure the logged-in npm account has publishing permission and meets the two-factor authentication requirements. For a new version, run `pnpm exec changeset`, select the affected packages and version increments, describe the changes, and commit the generated changeset. Changesets manages package versions and internal dependencies.
-
-```bash
-pnpm release
-```
-
-The process checks the working tree, runs lint, tests, and type checking, applies changesets, and builds the libraries. After a successful build, it creates a commit only if files changed, then publishes npm packages and pushes Git. If there are no pending changesets, it continues with the existing package versions, allowing retries. The root `package.json` version does not determine library release versions.
-
-Any failed step stops subsequent operations and returns a nonzero exit code. Generated version files, commits, and published packages are not rolled back automatically. Resolve the failure and handle any uncommitted files before retrying `pnpm release`. If the Git push fails, npm publishing may already have completed.
 
 ## License
 
