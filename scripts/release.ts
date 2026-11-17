@@ -1,28 +1,34 @@
-import { execSync } from "node:child_process";
+import { execSync } from 'node:child_process'
+
+const hasChanges = () => execSync('git status --porcelain', { encoding: 'utf8' }).trim().length > 0
+const run = (command: string) => execSync(command, { stdio: 'inherit' })
 
 try {
-  // 1. Lint & Test
-  execSync("pnpm lint && pnpm test", { stdio: "inherit" });
+  // 发布提交只能包含本次流程生成的文件，不能夹带已有改动。
+  if (hasChanges()) {
+    throw new Error('工作区有未提交的改动，请先提交或使用 git stash 保存后再发布。')
+  }
 
-  // 2. Version bump (interactive)
-  execSync("pnpm changeset version", { stdio: "inherit" });
+  run('pnpm lint')
+  run('pnpm test')
+  run('pnpm typecheck')
 
-  // Sync versions across packages
-  execSync("pnpm sync-versions", { stdio: "inherit" });
+  // Changesets 负责各包版本和内部依赖，不再用根版本覆盖其结果。
+  run('pnpm changeset version')
+  run('pnpm build')
 
-  // Optional: commit version changes
-  execSync('git add . && git commit -m "chore: bump versions [skip ci]"', { stdio: "inherit" });
+  // 重试发布时可能没有新 changeset；空提交不能阻止后续发布。
+  if (hasChanges()) {
+    run('git add . && git commit -m "chore: bump versions [skip ci]"')
+  } else {
+    console.log('没有版本改动，跳过 Git 提交。')
+  }
 
-  // 3. Build all packages
-  execSync("pnpm build", { stdio: "inherit" });
+  run('pnpm publish -r --access public --registry https://registry.npmjs.org/')
+  run('git push --follow-tags')
 
-  // 4. Publish to npm (recursive for all packages)
-  execSync("pnpm publish -r --access public --registry https://registry.npmjs.org/", { stdio: "inherit" });
-
-  // Optional: create git tag & push
-  execSync("git push --follow-tags", { stdio: "inherit" });
-
-  console.log("✅ Release completed");
+  console.log('✅ 发布完成')
 } catch (e) {
-  console.error("❌ Release failed:", e);
+  console.error('❌ 发布失败：', e)
+  process.exitCode = 1
 }

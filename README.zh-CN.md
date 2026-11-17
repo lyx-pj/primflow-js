@@ -8,12 +8,12 @@
 
 ## 模块与能力
 
-| 模块 | 能做什么 | 文档 |
-| --- | --- | --- |
-| `@lyx-pj/workflow-model` | 定义工作流的数据结构 | [README](packages/workflow-model/README.zh-CN.md) |
-| `@lyx-pj/workflow-engine` | 执行工作流 | [README](packages/workflow-engine/README.zh-CN.md) |
+| 模块                      | 能做什么                       | 文档                                               |
+| ------------------------- | ------------------------------ | -------------------------------------------------- |
+| `@lyx-pj/workflow-model`  | 定义工作流的数据结构           | [README](packages/workflow-model/README.zh-CN.md)  |
+| `@lyx-pj/workflow-engine` | 执行工作流                     | [README](packages/workflow-engine/README.zh-CN.md) |
 | `@lyx-pj/workflow-canvas` | 可视化编辑工作流，支持英中界面 | [README](packages/workflow-canvas/README.zh-CN.md) |
-| `@lyx-pj/workflow-react` | 在 React 应用中使用工作流 | [README](packages/workflow-react/README.zh-CN.md) |
+| `@lyx-pj/workflow-react`  | 在 React 应用中使用工作流      | [README](packages/workflow-react/README.zh-CN.md)  |
 
 ## 快速开始
 
@@ -39,16 +39,30 @@ pnpm dev
 
 ## 常用命令
 
-| 命令 | 作用 |
-| --- | --- |
-| `pnpm dev` | 启动示例应用，直接加载库源码 |
-| `pnpm dev:dist` | 先用构建产物启动示例，并监听库的修改 |
-| `pnpm build` | 构建所有库，并检查包之间的依赖 |
-| `pnpm build:all` | 构建全部工作区，包括示例 |
-| `pnpm typecheck` | 检查全仓库的 TypeScript 类型 |
-| `pnpm lint` / `pnpm test` | 检查代码 / 运行测试 |
-| `pnpm format` / `pnpm format:check` | 格式化 / 检查格式 |
-| `pnpm clean` | 删除构建产物 |
+| 命令                                | 作用                                        |
+| ----------------------------------- | ------------------------------------------- |
+| `pnpm dev`                          | 启动示例应用，直接加载库源码                |
+| `pnpm dev:dist`                     | 先用构建产物启动示例，并监听库的修改        |
+| `pnpm build`                        | 构建所有库，并检查包之间的依赖              |
+| `pnpm build:all`                    | 构建全部工作区，包括示例                    |
+| `pnpm typecheck`                    | 检查全仓库的 TypeScript 类型                |
+| `pnpm lint` / `pnpm test`           | 检查代码 / 运行测试                         |
+| `pnpm test:release`                 | 运行发布流程的回归测试，不执行真实发布      |
+| `pnpm release`                      | 检查、更新版本、构建、发布 npm 包并推送 Git |
+| `pnpm format` / `pnpm format:check` | 格式化 / 检查格式                           |
+| `pnpm clean`                        | 删除构建产物                                |
+
+## 发布
+
+先提交或使用 `git stash` 保存工作区改动，并确保 npm 登录账号具有发布权限、已满足双因素认证要求。需要发布新版本时，先运行 `pnpm exec changeset`，选择受影响的包、版本增量并填写变更说明，将生成的 changeset 一起提交；包版本及内部依赖由 Changesets 更新。
+
+```bash
+pnpm release
+```
+
+流程依次检查工作区、执行 lint、测试与类型检查，应用 changeset 并构建。构建通过后，有文件改动才自动提交，随后发布 npm 包并推送 Git。没有待处理的 changeset 时，使用各包现有版本继续发布，适用于重试；根目录 `package.json` 的版本不作为库包的发布版本来源。
+
+任一步骤失败都会停止后续操作并返回非零退出码。已经生成的版本文件、提交或已发布的包不会自动回滚；修复原因后，先处理未提交的文件，再运行 `pnpm release` 重试。Git 推送失败时，npm 发布可能已经完成。
 
 ## 许可
 
