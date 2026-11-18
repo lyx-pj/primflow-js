@@ -17,14 +17,10 @@ export function readReleaseVersion(root: string): string {
   return version
 }
 
-export function validateReleaseSnapshot(root: string, ref: string, subject: string): string {
+export function validateReleaseSnapshot(root: string, tag: string, subject: string): string {
   const version = readReleaseVersion(root)
-  if (
-    readPackage(root).version !== version ||
-    ref !== `release/v${version}` ||
-    subject !== `chore(release): v${version}`
-  ) {
-    throw new Error('发布分支、提交标题和根目录及四个库包的版本必须一致。')
+  if (readPackage(root).version !== version || tag !== `v${version}` || subject !== `chore(release): v${version}`) {
+    throw new Error('发布 tag、提交标题和根目录及四个库包的版本必须一致。')
   }
   return version
 }

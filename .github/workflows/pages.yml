@@ -2,7 +2,7 @@ name: 部署示例到 GitHub Pages
 
 on:
   push:
-    branches: ['release/v*']
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event.deleted != true
+    if: github.ref_type == 'tag' && github.event.deleted != true
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -37,7 +37,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: 校验发布分支与版本快照
+      - name: 校验发布 tag 与版本快照
         run: pnpm exec tsx scripts/validate-release.ts
         env:
           RELEASE_REF: ${{ github.ref_name }}

@@ -14,7 +14,10 @@ const repository = resolve(import.meta.dirname, '..')
 const originalExitCode = process.exitCode
 const publish = 'pnpm publish -r --access public --registry https://registry.npmjs.org/'
 const commit = 'git commit -m chore(release): v0.0.7'
-const ref = 'refs/heads/release/v0.0.7'
+const tag = 'v0.0.7'
+const ref = `refs/tags/${tag}`
+const createTag = `git tag -a ${tag} -m Release ${tag}`
+const push = `git push --atomic --no-follow-tags origin released:refs/heads/main tag-object:${ref}`
 let root: string
 let state: {
   bump: boolean
@@ -75,7 +78,7 @@ beforeEach(() => {
       if (!value) throw error()
       return value
     }
-    if (args[0] === 'ls-remote') return state.remote ? `${state.remote}\t${args[2]}\n` : ''
+    if (args[0] === 'ls-remote') return state.remote ? `${state.remote}\t${args.at(-1)}\n` : ''
     if (args[0] === 'ls-files') return ''
     if (args[0] === 'diff') return paths().join('\0') + (state.dirty ? '\0' : '')
     if (key === 'pnpm changeset version' && state.bump) {
@@ -89,7 +92,10 @@ beforeEach(() => {
       state.subject = 'chore(release): v0.0.7'
       state.dirty = false
     }
-    if (command === 'git' && args[0] === 'branch') state.refs[`refs/heads/${args[1]}`] = state.head
+    if (key === createTag) {
+      state.refs[ref] = 'tag-object'
+      state.refs[`${ref}^{commit}`] = state.head
+    }
     if (key === publish) state.onPublish?.()
     return ''
   })
@@ -107,22 +113,22 @@ function prepareRetry() {
   writeJson('package.json', { name: 'release-fixture', private: true, version: '0.0.7' })
   state.head = 'released'
   state.subject = 'chore(release): v0.0.7'
-  state.refs[ref] = state.head
+  state.refs[ref] = 'tag-object'
+  state.refs[`${ref}^{commit}`] = state.head
 }
 
 describe('发布流程', () => {
-  it('自动同步统一版本，构建后提交并创建分支，npm 成功后才原子推送', () => {
+  it('构建后提交并创建附注 tag，npm 成功后只原子推送 main 和本次 tag', () => {
     release(root)
     expect(process.exitCode).toBeUndefined()
     expect(readJson('package.json').version).toBe('0.0.7')
     expect(readReleaseVersion(root)).toBe('0.0.7')
-    expect(state.refs[ref]).toBe('released')
+    expect(state.refs[`${ref}^{commit}`]).toBe('released')
     expect(commands()).not.toContain('pnpm sync-versions')
     expect(commands().indexOf('pnpm build')).toBeLessThan(commands().indexOf(commit))
-    expect(commands().indexOf(commit)).toBeLessThan(commands().indexOf(publish))
-    expect(commands().at(-1)).toBe(
-      `git push --atomic --follow-tags --force-with-lease=${ref}: origin HEAD:refs/heads/main ${ref}:${ref}`
-    )
+    expect(commands().indexOf(commit)).toBeLessThan(commands().indexOf(createTag))
+    expect(commands().indexOf(createTag)).toBeLessThan(commands().indexOf(publish))
+    expect(commands().at(-1)).toBe(push)
     expect(execFileSync.mock.calls.every(([, , options]) => options.cwd === root)).toBe(true)
   })
 
@@ -148,7 +154,7 @@ describe('发布流程', () => {
     expect(process.exitCode).toBe(1)
   })
 
-  it.each(['local', 'remote'])('%s 同名版本分支冲突时不发布', (where) => {
+  it.each(['local', 'remote'])('%s 同名版本 tag 冲突时不发布', (where) => {
     if (where === 'local') state.refs[ref] = 'other'
     else state.remote = 'other'
     release(root)
@@ -157,7 +163,7 @@ describe('发布流程', () => {
     expect(commands()).not.toContain(commit)
   })
 
-  it('引用查询错误不能被当作分支不存在', () => {
+  it('引用查询错误不能被当作 tag 不存在', () => {
     const implementation = execFileSync.getMockImplementation()!
     execFileSync.mockImplementation((command, args, options) => {
       if (args[0] === 'rev-parse' && args[1] === '--verify') throw error(128)
@@ -175,12 +181,12 @@ describe('发布流程', () => {
     'pnpm test',
     'pnpm typecheck',
     'pnpm changeset version',
-    `git ls-remote origin ${ref}`,
+    `git ls-remote --refs origin ${ref}`,
     'pnpm build',
     commit,
-    'git branch release/v0.0.7',
+    createTag,
     publish,
-    `git push --atomic --follow-tags --force-with-lease=${ref}: origin HEAD:refs/heads/main ${ref}:${ref}`,
+    push,
   ])('%s 失败后不执行后续命令', (failed) => {
     state.fail = failed
     release(root)
@@ -260,7 +266,7 @@ describe('发布流程', () => {
     state.fail = publish
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(state.refs[ref]).toBe('released')
+    expect(state.refs[`${ref}^{commit}`]).toBe('released')
     expect(commands().some((cmd) => cmd.startsWith('git push'))).toBe(false)
     state.fail = ''
     process.exitCode = undefined
@@ -269,12 +275,13 @@ describe('发布流程', () => {
     expect(process.exitCode).toBeUndefined()
     expect(commands()).not.toContain('pnpm changeset version')
     expect(commands()).not.toContain(commit)
+    expect(commands()).not.toContain(createTag)
     expect(commands()).toContain(publish)
     expect(commands().at(-1)).toContain('git push --atomic')
   })
 
   it('推送失败后重跑复用同一快照', () => {
-    state.fail = `git push --atomic --follow-tags --force-with-lease=${ref}: origin HEAD:refs/heads/main ${ref}:${ref}`
+    state.fail = push
     release(root)
     expect(process.exitCode).toBe(1)
     state.fail = ''
@@ -286,13 +293,38 @@ describe('发布流程', () => {
     expect(commands()).not.toContain('pnpm changeset version')
   })
 
-  it('已推送的同一版本使用既有引用作为约束，不移动分支', () => {
+  it('重试时复用已经推送的同一个附注 tag', () => {
     prepareRetry()
-    state.remote = state.head
+    state.remote = state.refs[ref]
     release(root)
     expect(process.exitCode).toBeUndefined()
     expect(commands()).not.toContain(commit)
-    expect(commands().at(-1)).toContain(`--force-with-lease=${ref}:released`)
+    expect(commands()).not.toContain(createTag)
+    expect(commands().at(-1)).toBe(push)
+  })
+
+  it('本地 tag 指向不同提交时停止发布', () => {
+    prepareRetry()
+    state.refs[`${ref}^{commit}`] = 'other'
+    release(root)
+    expect(process.exitCode).toBe(1)
+    expect(commands()).not.toContain(publish)
+  })
+
+  it('提交成功但创建 tag 失败后，重跑补建 tag 并复用提交', () => {
+    state.fail = createTag
+    release(root)
+    expect(process.exitCode).toBe(1)
+    expect(commands()).not.toContain(publish)
+    state.fail = ''
+    process.exitCode = undefined
+    execFileSync.mockClear()
+    release(root)
+    expect(process.exitCode).toBeUndefined()
+    expect(commands()).not.toContain('pnpm changeset version')
+    expect(commands()).not.toContain(commit)
+    expect(commands()).toContain(createTag)
+    expect(commands().at(-1)).toBe(push)
   })
 
   it('npm 发布期间快照改变时停止推送', () => {
@@ -303,34 +335,45 @@ describe('发布流程', () => {
     expect(process.exitCode).toBe(1)
     expect(commands().some((cmd) => cmd.startsWith('git push'))).toBe(false)
   })
+
+  it('npm 发布期间同名 tag 被替换时停止推送', () => {
+    state.onPublish = () => {
+      state.refs[ref] = 'replacement-tag-object'
+    }
+    release(root)
+    expect(process.exitCode).toBe(1)
+    expect(commands().some((cmd) => cmd.startsWith('git push'))).toBe(false)
+  })
 })
 
 describe('Pages 发布快照', () => {
-  it('允许匹配的发布分支、提交和统一版本', () => {
+  it('允许匹配的 tag、提交和统一版本', () => {
     prepareRetry()
-    expect(validateReleaseSnapshot(root, 'release/v0.0.7', state.subject)).toBe('0.0.7')
+    expect(validateReleaseSnapshot(root, tag, state.subject)).toBe('0.0.7')
   })
   it.each([
     ['main', 'chore(release): v0.0.7'],
-    ['release/v0.0.8', 'chore(release): v0.0.7'],
-    ['release/v0.0.7', 'feat: change'],
-  ])('拒绝不匹配的分支 %s 或提交 %s', (branch, subject) => {
+    ['release/v0.0.7', 'chore(release): v0.0.7'],
+    ['v0.0.8', 'chore(release): v0.0.7'],
+    ['v0.0.7', 'feat: change'],
+  ])('拒绝不匹配的 tag %s 或提交 %s', (name, subject) => {
     prepareRetry()
-    expect(() => validateReleaseSnapshot(root, branch, subject)).toThrow()
+    expect(() => validateReleaseSnapshot(root, name, subject)).toThrow()
   })
   it('根版本不一致时不能部署', () => {
     prepareRetry()
     writeJson('package.json', { version: '0.0.6' })
-    expect(() => validateReleaseSnapshot(root, 'release/v0.0.7', state.subject)).toThrow()
+    expect(() => validateReleaseSnapshot(root, tag, state.subject)).toThrow()
   })
   it('预发布版本不能进入当前稳定版发布流程', () => {
     for (const name of releasePackages) writeJson(`packages/${name}/package.json`, { version: '0.0.7-beta.1' })
     expect(() => readReleaseVersion(root)).toThrow('稳定版本')
   })
-  it('workflow 仅监听版本分支、保留手动入口并校验 checkout 的快照', () => {
+  it('workflow 仅监听版本 tag、保留手动入口并校验 checkout 的快照', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
-    expect(workflow).toContain("branches: ['release/v*']")
-    expect(workflow).not.toContain('branches: [main]')
+    expect(workflow).toContain("tags: ['v*']")
+    expect(workflow).not.toMatch(/^\s+branches:/m)
+    expect(workflow).toContain("github.ref_type == 'tag'")
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('ref: ${{ github.sha }}')
     expect(workflow).toContain('pnpm exec tsx scripts/validate-release.ts')

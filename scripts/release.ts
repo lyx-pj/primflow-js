@@ -11,7 +11,7 @@ export function release(root = process.cwd()): void {
   const run = (command: string, args: string[]) => execFileSync(command, args, { cwd: root, stdio: 'inherit' })
   const git = (...args: string[]) => read('git', args)
   const hasChanges = () => git('status', '--porcelain').length > 0
-  const localBranch = (ref: string) => {
+  const localRef = (ref: string) => {
     // --verify 的退出码 1 表示引用不存在，其他错误不能被当作不存在。
     try {
       return git('rev-parse', '--verify', '--quiet', ref)
@@ -53,15 +53,13 @@ export function release(root = process.cwd()): void {
 
     const previousVersion = readReleaseVersion(root)
     const initialHead = git('rev-parse', 'HEAD')
-    const previousRef = `refs/heads/release/v${previousVersion}`
     const pendingChangesets = readdirSync(join(root, '.changeset')).some(
       (name) => name.endsWith('.md') && name !== 'README.md'
     )
     const retry =
       !pendingChangesets &&
       readPackage(root).version === previousVersion &&
-      git('log', '-1', '--format=%s') === `chore(release): v${previousVersion}` &&
-      localBranch(previousRef) === initialHead
+      git('log', '-1', '--format=%s') === `chore(release): v${previousVersion}`
 
     run('pnpm', ['lint'])
     run('pnpm', ['test'])
@@ -83,12 +81,15 @@ export function release(root = process.cwd()): void {
       writeFileSync(join(root, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`)
     }
 
-    const branch = `release/v${version}`
-    const ref = `refs/heads/${branch}`
-    const local = localBranch(ref)
-    const remoteHead = git('ls-remote', remote, ref).split(/\s/)[0]
-    if ((local && (!retry || local !== initialHead)) || (remoteHead && (!retry || remoteHead !== initialHead))) {
-      throw new Error(`${branch} 已指向其他发布记录，不能覆盖。`)
+    const tag = `v${version}`
+    const ref = `refs/tags/${tag}`
+    const existingTag = localRef(ref)
+    const remoteTag = git('ls-remote', '--refs', remote, ref).split(/\s/)[0]
+    if (
+      (existingTag && (!retry || localRef(`${ref}^{commit}`) !== initialHead)) ||
+      (remoteTag && (!retry || remoteTag !== existingTag))
+    ) {
+      throw new Error(`${tag} 已存在且与本次发布不一致，请先核对本地和远端 tag。`)
     }
 
     const paths = changedPaths()
@@ -113,26 +114,33 @@ export function release(root = process.cwd()): void {
       ) {
         throw new Error('暂存区与版本流程生成的文件不一致。')
       }
-      run('git', ['commit', '-m', `chore(release): v${version}`])
-      run('git', ['branch', branch])
+      run('git', ['commit', '-m', `chore(release): ${tag}`])
     }
     const releaseHead = git('rev-parse', 'HEAD')
-    validateReleaseSnapshot(root, branch, git('log', '-1', '--format=%s'))
-    if (localBranch(ref) !== releaseHead || hasChanges()) throw new Error('发布快照或工作区发生了变化。')
+    validateReleaseSnapshot(root, tag, git('log', '-1', '--format=%s'))
+    if (!existingTag) run('git', ['tag', '-a', tag, '-m', `Release ${tag}`])
+    const tagObject = localRef(ref)
+    if (
+      !tagObject ||
+      (existingTag && tagObject !== existingTag) ||
+      localRef(`${ref}^{commit}`) !== releaseHead ||
+      hasChanges()
+    ) {
+      throw new Error('发布 tag 或工作区发生了变化。')
+    }
 
     run('pnpm', ['publish', '-r', '--access', 'public', '--registry', 'https://registry.npmjs.org/'])
-    if (git('rev-parse', 'HEAD') !== releaseHead || localBranch(ref) !== releaseHead || hasChanges()) {
+    if (git('rev-parse', 'HEAD') !== releaseHead || localRef(ref) !== tagObject || hasChanges()) {
       throw new Error('npm 发布期间快照发生了变化，已停止推送。')
     }
-    // 仅为发布分支设置预期值；main 仍须满足普通快进规则。
+    // 使用已验证的对象推送，避免带上无关的本地 tag。
     run('git', [
       'push',
       '--atomic',
-      '--follow-tags',
-      `--force-with-lease=${ref}:${remoteHead}`,
+      '--no-follow-tags',
       remote,
-      'HEAD:refs/heads/main',
-      `${ref}:${ref}`,
+      `${releaseHead}:refs/heads/main`,
+      `${tagObject}:${ref}`,
     ])
     console.log('✅ 发布完成')
   } catch (error) {
