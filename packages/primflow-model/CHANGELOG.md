@@ -1,5 +1,11 @@
 # @lyx-pj/primflow-model
 
+## 1.1.0
+
+### Minor Changes
+
+- Use version tags for releases and GitHub Pages deployments.
+
 ## 1.0.0
 
 ### Major Changes
