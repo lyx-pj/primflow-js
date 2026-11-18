@@ -56,7 +56,7 @@ flowchart TD
 | 画布执行提示 | canvas 显示应用传入的状态和数据，不负责执行或收集日志 |
 | 文件存档 | 应用切换文件前先保存当前修改，查看历史记录时暂停自动保存 |
 
-事件参数和任务数据通过复制来隔离。连接、函数等不能复制的资源放在服务或 `nodeState` 中，具体用法见 [engine README](../packages/workflow-engine/README.zh-CN.md)。
+事件参数和任务数据通过复制来隔离。连接、函数等不能复制的资源放在服务或 `nodeState` 中，具体用法见 [engine README](../packages/primflow-engine/README.zh-CN.md)。
 
 ## 一次执行的过程
 
@@ -66,7 +66,7 @@ flowchart TD
 4. engine 执行节点并发送事件，应用据此更新画布状态、日志和执行链。
 5. 停止后可以查看历史记录；退出历史回溯时恢复原来的编辑图。
 
-engine 只接收已经准备好的图，不读取浏览器文件。普通子图通过 `Start` / `End` 传入参数和返回结果，规则见 [子图参数](../packages/workflow-engine/docs/subgraphs.zh-CN.md)；循环使用 `LoopEntry` / `LoopReturn`，见 [循环执行](../packages/workflow-engine/docs/loops.zh-CN.md)。两者的执行规则不同。
+engine 只接收已经准备好的图，不读取浏览器文件。普通子图通过 `Start` / `End` 传入参数和返回结果，规则见 [子图参数](../packages/primflow-engine/docs/subgraphs.zh-CN.md)；循环使用 `LoopEntry` / `LoopReturn`，见 [循环执行](../packages/primflow-engine/docs/loops.zh-CN.md)。两者的执行规则不同。
 
 ## 出错和停止时
 
@@ -76,7 +76,7 @@ engine 只接收已经准备好的图，不读取浏览器文件。普通子图�
 - 断点只暂停对应任务；`resume(taskId)` 继续该任务，`stopTask(taskId)` 取消该任务。
 - 停止无法强行终止任意业务代码，节点应响应取消信号。已经发生的外部操作不会回滚。
 
-引擎、任务和节点分别有自己的状态，完整状态列表见 [engine README](../packages/workflow-engine/README.zh-CN.md)。
+引擎、任务和节点分别有自己的状态，完整状态列表见 [engine README](../packages/primflow-engine/README.zh-CN.md)。
 
 ## 修改代码时检查哪里
 
@@ -84,7 +84,7 @@ engine 只接收已经准备好的图，不读取浏览器文件。普通子图�
 | --- | --- |
 | 节点端口或 JSON 格式 | model 定义、canvas 保存加载、engine 加载、示例文件恢复 |
 | 任务查询或事件 | engine 与示例的 events.ts |
-| 画布挂载接口 | canvas、React `GraphView` 和 [React 接入](../packages/workflow-react/docs/adapter-contract.zh-CN.md) |
+| 画布挂载接口 | canvas、React `GraphView` 和 [React 接入](../packages/primflow-react/docs/adapter-contract.zh-CN.md) |
 | 包依赖或构建配置 | 运行 `pnpm build`，执行 [依赖检查](../scripts/verify-boundaries.mjs) |
 
-相关测试包括 [任务隔离](../packages/workflow-engine/tests/tasks.test.ts)、[循环](../packages/workflow-engine/tests/loops.test.ts)、[子图文件](../examples/workflow-react/tests/subgraphs.test.ts)、[回溯](../packages/workflow-canvas/tests/replay.test.ts)和[自动保存](../examples/workflow-react/tests/autosave.test.ts)。
+相关测试包括 [任务隔离](../packages/primflow-engine/tests/tasks.test.ts)、[循环](../packages/primflow-engine/tests/loops.test.ts)、[子图文件](../examples/primflow-react/tests/subgraphs.test.ts)、[回溯](../packages/primflow-canvas/tests/replay.test.ts)和[自动保存](../examples/primflow-react/tests/autosave.test.ts)。

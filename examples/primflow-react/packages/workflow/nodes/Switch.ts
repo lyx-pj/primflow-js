@@ -1,0 +1,52 @@
+import { Node } from '@lyx-pj/primflow-model'
+import type { ExecutorFn } from '@lyx-pj/primflow-engine'
+import { localize } from '../i18n'
+
+export class Switch extends Node {
+  static get definition() {
+    return {
+      type: 'switch',
+      title: localize('Switch', '多路分支'),
+      inputs: [
+        { name: 'exec', type: 'exec' },
+        { name: 'condition', type: 'string', label: localize('Match value', '匹配值') },
+        { name: 'case_1_value', type: 'string' },
+      ] as const,
+      outputs: [
+        { name: 'default', type: 'exec', label: localize('Default', '默认') },
+        { name: 'condition', type: 'string', label: localize('Match value', '匹配值') },
+        { name: 'case_1', type: 'exec' },
+      ] as const,
+      style: {
+        header: { background: '#297964', color: '#fff' },
+        ports: {
+          input: {
+            editor: {
+              box: { width: 80 },
+            },
+          },
+        },
+      },
+    } as const
+  }
+
+  static executor: ExecutorFn = ({ getInput, setOutput, next, inputs }) => {
+    const condition = getInput<string>('condition') ?? ''
+    let outputKey = ''
+    setOutput('condition', condition)
+    for (const input of inputs) {
+      if (input.name.startsWith('case_')) {
+        const caseKey = input.name
+        const caseValue = getInput(caseKey)
+        if (condition === caseValue) {
+          outputKey = caseKey.replace('_value', '')
+        }
+      }
+    }
+    if (outputKey) {
+      next([outputKey])
+    } else {
+      next(['default'])
+    }
+  }
+}

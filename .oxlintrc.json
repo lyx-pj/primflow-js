@@ -10,7 +10,7 @@
   "ignorePatterns": ["**/node_modules/**", "**/build/**", "**/dist/**", "packages/*/tests/**", "packages/**/*.test.ts"],
   "overrides": [
     {
-      "files": ["packages/workflow-react/**/*.{ts,tsx}", "examples/workflow-react/**/*.{ts,tsx}"],
+      "files": ["packages/primflow-react/**/*.{ts,tsx}", "examples/primflow-react/**/*.{ts,tsx}"],
       "rules": {
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "warn",
@@ -21,7 +21,7 @@
       }
     },
     {
-      "files": ["examples/workflow-react/**/*.{ts,tsx}"],
+      "files": ["examples/primflow-react/**/*.{ts,tsx}"],
       "rules": {
         "react/only-export-components": ["warn", { "allowConstantExport": true }]
       }

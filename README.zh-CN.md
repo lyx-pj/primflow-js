@@ -1,33 +1,33 @@
-# Workflow JS
+# Prim flow
 
 [English](README.md) | 简体中文
 
 基于节点与连线的可视化编程工具库：用同一份图定义连接编辑、执行与调试，适合嵌入流程编辑器、数据处理工具和 AI 工作流应用。仓库包含 4 个库，并附带一个可运行的 React 示例。
 
-体验 [React 在线示例](https://lyx-pj.github.io/workflow-js/)。
+体验 [React 在线示例](https://lyx-pj.github.io/primflow-js/)。
 
 ## 模块与能力
 
 | 模块                      | 能做什么                       | 文档                                               |
 | ------------------------- | ------------------------------ | -------------------------------------------------- |
-| `@lyx-pj/workflow-model`  | 定义工作流的数据结构           | [README](packages/workflow-model/README.zh-CN.md)  |
-| `@lyx-pj/workflow-engine` | 执行工作流                     | [README](packages/workflow-engine/README.zh-CN.md) |
-| `@lyx-pj/workflow-canvas` | 可视化编辑工作流，支持英中界面 | [README](packages/workflow-canvas/README.zh-CN.md) |
-| `@lyx-pj/workflow-react`  | 在 React 应用中使用工作流      | [README](packages/workflow-react/README.zh-CN.md)  |
+| `@lyx-pj/primflow-model`  | 定义工作流的数据结构           | [README](packages/primflow-model/README.zh-CN.md)  |
+| `@lyx-pj/primflow-engine` | 执行工作流                     | [README](packages/primflow-engine/README.zh-CN.md) |
+| `@lyx-pj/primflow-canvas` | 可视化编辑工作流，支持英中界面 | [README](packages/primflow-canvas/README.zh-CN.md) |
+| `@lyx-pj/primflow-react`  | 在 React 应用中使用工作流      | [README](packages/primflow-react/README.zh-CN.md)  |
 
 ## 快速开始
 
 在已有的 React 18 或 19 项目中安装：
 
 ```bash
-npm install @lyx-pj/workflow-react @lyx-pj/workflow-canvas @lyx-pj/workflow-engine
+npm install @lyx-pj/primflow-react @lyx-pj/primflow-canvas @lyx-pj/primflow-engine
 ```
 
 将以下内容放入 `App.tsx`，即可挂载编辑器：
 
 ```tsx
-import { NodeRegistry } from '@lyx-pj/workflow-canvas'
-import { createGraphContext, GraphView } from '@lyx-pj/workflow-react'
+import { NodeRegistry } from '@lyx-pj/primflow-canvas'
+import { createGraphContext, GraphView } from '@lyx-pj/primflow-react'
 
 const { GraphProvider, useGraph } = createGraphContext(new NodeRegistry())
 
@@ -45,7 +45,7 @@ export default function App() {
 }
 ```
 
-此示例用于挂载编辑器。注册自定义节点和接入工作流执行见 [React 接入文档](packages/workflow-react/README.zh-CN.md)；只需执行流程时，可直接使用 [engine](packages/workflow-engine/README.zh-CN.md)。
+此示例用于挂载编辑器。注册自定义节点和接入工作流执行见 [React 接入文档](packages/primflow-react/README.zh-CN.md)；只需执行流程时，可直接使用 [engine](packages/primflow-engine/README.zh-CN.md)。
 
 ## 运行仓库示例
 

@@ -1,9 +1,9 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/workflow-model" },
-    { "path": "./packages/workflow-engine" },
-    { "path": "./packages/workflow-canvas" },
-    { "path": "./packages/workflow-react" }
+    { "path": "./packages/primflow-model" },
+    { "path": "./packages/primflow-engine" },
+    { "path": "./packages/primflow-canvas" },
+    { "path": "./packages/primflow-react" }
   ]
 }

@@ -72,32 +72,32 @@ const isInternal = (spec) => spec.startsWith('.')
 
 // ---- 1. 源码级：依赖方向 -------------------------------------------------
 
-checkImports('workflow-model', (spec) => {
+checkImports('primflow-model', (spec) => {
   if (isInternal(spec)) return null
   return 'model 是零依赖的领域层，不得引用任何外部包'
 })
 
-checkImports('workflow-engine', (spec) => {
+checkImports('primflow-engine', (spec) => {
   if (isInternal(spec)) return null
-  if (spec === '@lyx-pj/workflow-model') return null
-  if (spec.startsWith('@lyx-pj/workflow-model/')) return '请从 model 的根入口导入，避免深层路径'
+  if (spec === '@lyx-pj/primflow-model') return null
+  if (spec.startsWith('@lyx-pj/primflow-model/')) return '请从 model 的根入口导入，避免深层路径'
   return 'engine 只能依赖 model'
 })
 
-checkImports('workflow-canvas', (spec) => {
+checkImports('primflow-canvas', (spec) => {
   if (isInternal(spec)) return null
-  if (spec === '@lyx-pj/workflow-model') return null
-  if (spec.startsWith('@lyx-pj/workflow-model/')) return '请从 model 的根入口导入，避免深层路径'
+  if (spec === '@lyx-pj/primflow-model') return null
+  if (spec.startsWith('@lyx-pj/primflow-model/')) return '请从 model 的根入口导入，避免深层路径'
   if (spec === '@joint/core') return null
   if (spec === 'lit-html' || spec.startsWith('lit-html/')) return null
-  if (spec.startsWith('@lyx-pj/workflow-engine')) return 'canvas 不得依赖 engine（否则运行时状态会渗进画布层）'
+  if (spec.startsWith('@lyx-pj/primflow-engine')) return 'canvas 不得依赖 engine（否则运行时状态会渗进画布层）'
   return 'canvas 只能依赖 model、@joint/core 与 lit-html'
 })
 
-checkImports('workflow-react', (spec) => {
+checkImports('primflow-react', (spec) => {
   if (isInternal(spec)) return null
-  if (spec === '@lyx-pj/workflow-canvas' || spec === '@lyx-pj/workflow-engine') return null
-  if (spec === '@lyx-pj/workflow-model') return null
+  if (spec === '@lyx-pj/primflow-canvas' || spec === '@lyx-pj/primflow-engine') return null
+  if (spec === '@lyx-pj/primflow-model') return null
   if (spec === 'react' || spec.startsWith('react/')) return null
   if (spec === 'react-dom' || spec.startsWith('react-dom/')) return null
   return 'react 适配层只允许依赖 model / engine / canvas / react'
@@ -107,9 +107,9 @@ checkImports('workflow-react', (spec) => {
 
 /** 每层允许出现的 @lyx-pj/* 声明依赖。 */
 const DTS_ALLOWED = {
-  'workflow-model': [],
-  'workflow-engine': ['@lyx-pj/workflow-model'],
-  'workflow-canvas': ['@lyx-pj/workflow-model'],
+  'primflow-model': [],
+  'primflow-engine': ['@lyx-pj/primflow-model'],
+  'primflow-canvas': ['@lyx-pj/primflow-model'],
 }
 
 for (const [name, allowed] of Object.entries(DTS_ALLOWED)) {
@@ -157,15 +157,15 @@ const externalImports = (code) => {
   return [...new Set(specs)]
 }
 
-checkBundle('workflow-model', 'build/index.mjs', (code) => {
+checkBundle('primflow-model', 'build/index.mjs', (code) => {
   const specs = externalImports(code)
   record(specs.length === 0, 'model 产物无外部 import')
   return true
 })
 
-checkBundle('workflow-engine', 'build/index.mjs', (code) => {
+checkBundle('primflow-engine', 'build/index.mjs', (code) => {
   const specs = externalImports(code)
-  const unexpected = specs.filter((s) => s !== '@lyx-pj/workflow-model')
+  const unexpected = specs.filter((s) => s !== '@lyx-pj/primflow-model')
   record(unexpected.length === 0, `engine 产物只 external model（发现：${unexpected.join(', ') || '无'}）`)
   record(!/\bdocument\b/.test(code), 'engine 产物不含 DOM 引用（document）')
   record(!/\bwindow\b/.test(code), 'engine 产物不含 DOM 引用（window）')
@@ -173,27 +173,27 @@ checkBundle('workflow-engine', 'build/index.mjs', (code) => {
   return true
 })
 
-checkBundle('workflow-canvas', 'build/index.mjs', (code) => {
+checkBundle('primflow-canvas', 'build/index.mjs', (code) => {
   const specs = externalImports(code)
-  record(specs.includes('@lyx-pj/workflow-model'), 'canvas 产物把 model 作为外部依赖引用')
+  record(specs.includes('@lyx-pj/primflow-model'), 'canvas 产物把 model 作为外部依赖引用')
   record(specs.includes('@joint/core'), 'canvas 产物把 @joint/core 作为外部依赖引用')
   record(specs.some((s) => s === 'lit-html' || s.startsWith('lit-html/')), 'canvas 产物把 lit-html 作为外部依赖引用')
   const unexpected = specs.filter(
-    (s) => s !== '@lyx-pj/workflow-model' && s !== '@joint/core' && s !== 'lit-html' && !s.startsWith('lit-html/')
+    (s) => s !== '@lyx-pj/primflow-model' && s !== '@joint/core' && s !== 'lit-html' && !s.startsWith('lit-html/')
   )
   record(unexpected.length === 0, `canvas 产物无其它外部依赖（发现：${unexpected.join(', ') || '无'}）`)
   record(!/vendor-[\w-]+\.js/.test(code), 'canvas 产物不再产出内联 vendor chunk')
   return true
 })
 
-checkBundle('workflow-react', 'build/index.es.js', (code) => {
-  const sizeKb = statSync(join(pkg('workflow-react'), 'build/index.es.js')).size / 1024
+checkBundle('primflow-react', 'build/index.es.js', (code) => {
+  const sizeKb = statSync(join(pkg('primflow-react'), 'build/index.es.js')).size / 1024
   record(sizeKb < 20, `react 适配层产物 ${sizeKb.toFixed(2)}kB < 20kB（防止把下层内联回来）`)
   record(!/BlueprintNode/.test(code), 'react 适配层不含 canvas 内部实现（BlueprintNode）')
   record(!/\bjoint\b/i.test(code), 'react 适配层不含 JointJS')
   const specs = externalImports(code)
-  record(specs.includes('@lyx-pj/workflow-canvas'), 'react 适配层把 canvas 作为外部依赖引用')
-  record(specs.includes('@lyx-pj/workflow-engine'), 'react 适配层把 engine 作为外部依赖引用')
+  record(specs.includes('@lyx-pj/primflow-canvas'), 'react 适配层把 canvas 作为外部依赖引用')
+  record(specs.includes('@lyx-pj/primflow-engine'), 'react 适配层把 engine 作为外部依赖引用')
   record(specs.some((s) => s.startsWith('react/')), 'react 适配层把 react/jsx-runtime 作为外部依赖引用')
   return true
 })
@@ -205,11 +205,11 @@ checkBundle('workflow-react', 'build/index.es.js', (code) => {
 // 注意：各层的指纹互斥。flowStackGraph 是 engine 自己的实现细节，
 // 所以它出现在 engine 产物里是正常的，出现在 canvas 产物里才是内联。
 const FINGERPRINTS = {
-  'workflow-model': ['BlueprintNode', 'flowStackGraph', '@joint/core'],
+  'primflow-model': ['BlueprintNode', 'flowStackGraph', '@joint/core'],
   // engine 的黑名单只能是「canvas 独有」的实现；flowStackGraph / executeSubgraph
   // 本来就是 engine 自己的，出现在这里属于正常。
-  'workflow-engine': ['BlueprintNode', '@joint/core'],
-  'workflow-canvas': ['flowStackGraph', 'subWaitingGraph', 'portConnectionValueMap', 'executeSubgraph'],
+  'primflow-engine': ['BlueprintNode', '@joint/core'],
+  'primflow-canvas': ['flowStackGraph', 'subWaitingGraph', 'portConnectionValueMap', 'executeSubgraph'],
 }
 
 for (const [name, marks] of Object.entries(FINGERPRINTS)) {

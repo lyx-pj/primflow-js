@@ -1,0 +1,37 @@
+{
+  "name": "primflow-react-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:dist": "vite --mode dist",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "lint": "oxlint --config ../../.oxlintrc.json --deny-warnings .",
+    "preview": "vite preview",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@lyx-pj/primflow-canvas": "workspace:^",
+    "@lyx-pj/primflow-engine": "workspace:^",
+    "@lyx-pj/primflow-model": "workspace:^",
+    "@lyx-pj/primflow-react": "workspace:^",
+    "@google/genai": "^1.20.0",
+    "@headlessui/react": "^2.2.10",
+    "openai": "^5.23.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "remixicon": "4.9.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react-swc": "^4.0.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "~5.8.3",
+    "vite": "^7.1.2"
+  }
+}

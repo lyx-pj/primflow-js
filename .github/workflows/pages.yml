@@ -2,7 +2,7 @@ name: 部署示例到 GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: ['release/v*']
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event.deleted != true
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -23,6 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -34,17 +37,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: 校验发布分支与版本快照
+        run: pnpm exec tsx scripts/validate-release.ts
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+
       - name: 构建库并验证包边界
         run: pnpm build
 
       - name: 构建示例
-        run: pnpm --filter workflow-react-example build --base=/workflow-js/
+        run: pnpm --filter primflow-react-example build --base=/primflow-js/
 
       - uses: actions/configure-pages@v6
 
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: examples/workflow-react/dist
+          path: examples/primflow-react/dist
 
       - name: 发布页面
         id: deployment

@@ -56,7 +56,7 @@ The canvas and engine need the same node and graph data, but workflow execution 
 | Canvas execution indicators | canvas displays states and data supplied by the application; it neither executes workflows nor collects logs |
 | Saved files | The application saves current edits before switching files and pauses autosave while displaying history |
 
-Event arguments and task data are copied to isolate them. Resources that cannot be copied, such as connections and functions, belong in services or `nodeState`. See the [engine README](../packages/workflow-engine/README.md) for usage.
+Event arguments and task data are copied to isolate them. Resources that cannot be copied, such as connections and functions, belong in services or `nodeState`. See the [engine README](../packages/primflow-engine/README.md) for usage.
 
 ## Execution flow
 
@@ -66,7 +66,7 @@ Event arguments and task data are copied to isolate them. Resources that cannot 
 4. engine executes nodes and emits events; the application updates canvas states, logs, and the execution chain.
 5. History is available after stopping. Leaving replay restores the original editing graph.
 
-engine only receives prepared graphs and does not read browser files. Ordinary subgraphs use `Start` / `End` to receive parameters and return results; see [Subgraph parameters](../packages/workflow-engine/docs/subgraphs.md). Loops use `LoopEntry` / `LoopReturn`; see [Loop execution](../packages/workflow-engine/docs/loops.md). Their execution rules differ.
+engine only receives prepared graphs and does not read browser files. Ordinary subgraphs use `Start` / `End` to receive parameters and return results; see [Subgraph parameters](../packages/primflow-engine/docs/subgraphs.md). Loops use `LoopEntry` / `LoopReturn`; see [Loop execution](../packages/primflow-engine/docs/loops.md). Their execution rules differ.
 
 ## Errors and stopping
 
@@ -76,7 +76,7 @@ engine only receives prepared graphs and does not read browser files. Ordinary s
 - A breakpoint pauses only its task. `resume(taskId)` resumes that task, and `stopTask(taskId)` cancels it.
 - Stopping cannot forcibly terminate arbitrary business code. Nodes should respond to cancellation signals. External operations already performed are not rolled back.
 
-The engine, tasks, and nodes each have their own states. See the [engine README](../packages/workflow-engine/README.md) for complete state lists.
+The engine, tasks, and nodes each have their own states. See the [engine README](../packages/primflow-engine/README.md) for complete state lists.
 
 ## What to check when changing code
 
@@ -84,7 +84,7 @@ The engine, tasks, and nodes each have their own states. See the [engine README]
 | --- | --- |
 | Node ports or JSON format | model definitions, canvas serialization, engine loading, and example file restoration |
 | Task queries or events | engine and the example's events.ts |
-| Canvas mounting API | canvas, React `GraphView`, and [React integration](../packages/workflow-react/docs/adapter-contract.md) |
+| Canvas mounting API | canvas, React `GraphView`, and [React integration](../packages/primflow-react/docs/adapter-contract.md) |
 | Package dependencies or build configuration | Run `pnpm build` and the [boundary checks](../scripts/verify-boundaries.mjs) |
 
-Related tests cover [task isolation](../packages/workflow-engine/tests/tasks.test.ts), [loops](../packages/workflow-engine/tests/loops.test.ts), [subgraph files](../examples/workflow-react/tests/subgraphs.test.ts), [replay](../packages/workflow-canvas/tests/replay.test.ts), and [autosave](../examples/workflow-react/tests/autosave.test.ts).
+Related tests cover [task isolation](../packages/primflow-engine/tests/tasks.test.ts), [loops](../packages/primflow-engine/tests/loops.test.ts), [subgraph files](../examples/primflow-react/tests/subgraphs.test.ts), [replay](../packages/primflow-canvas/tests/replay.test.ts), and [autosave](../examples/primflow-react/tests/autosave.test.ts).

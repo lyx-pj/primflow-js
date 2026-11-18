@@ -1,0 +1,52 @@
+{
+  "name": "@lyx-pj/primflow-canvas",
+  "version": "0.0.6",
+  "private": false,
+  "type": "module",
+  "files": [
+    "build/**/*",
+    "README.md",
+    "README.zh-CN.md",
+    "docs/**/*.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "@lyx-pj/source": "./src/index.ts",
+      "types": "./build/types/index.d.ts",
+      "import": "./build/index.mjs",
+      "default": "./build/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "clean": "rimraf build",
+    "build": "pnpm run clean && concurrently 'rolldown -c rolldown.config.ts' 'tsc -b tsconfig.json'",
+    "dev": "concurrently 'rolldown -c rolldown.config.ts --watch' 'tsc -b tsconfig.json --watch'",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --reporter verbose --passWithNoTests",
+    "lint": "oxlint --config ../../.oxlintrc.json --deny-warnings ."
+  },
+  "dependencies": {
+    "@lyx-pj/primflow-model": "workspace:*",
+    "@joint/core": "^4.1.3",
+    "lit-html": "^3.3.3"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "rolldown": "1.0.0-beta.32"
+  },
+  "keywords": [
+    "workflow",
+    "flow",
+    "editor",
+    "canvas",
+    "graph",
+    "node-based",
+    "diagram"
+  ]
+}

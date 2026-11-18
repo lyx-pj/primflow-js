@@ -1,13 +1,13 @@
 {
-  "name": "workflow-monorepo",
+  "name": "primflow",
   "private": true,
   "version": "0.0.6",
   "type": "module",
   "scripts": {
     "prepare": "husky",
     "commitlint": "commitlint --edit",
-    "dev": "pnpm --filter workflow-react-example dev",
-    "dev:dist": "pnpm --filter './packages/*' build && concurrently -k -n model,engine,canvas,react,app -c blue,cyan,green,magenta,yellow \"pnpm --filter @lyx-pj/workflow-model dev\" \"pnpm --filter @lyx-pj/workflow-engine dev\" \"pnpm --filter @lyx-pj/workflow-canvas dev\" \"pnpm --filter @lyx-pj/workflow-react dev\" \"pnpm --filter workflow-react-example dev:dist\"",
+    "dev": "pnpm --filter primflow-react-example dev",
+    "dev:dist": "pnpm --filter './packages/*' build && concurrently -k -n model,engine,canvas,react,app -c blue,cyan,green,magenta,yellow \"pnpm --filter @lyx-pj/primflow-model dev\" \"pnpm --filter @lyx-pj/primflow-engine dev\" \"pnpm --filter @lyx-pj/primflow-canvas dev\" \"pnpm --filter @lyx-pj/primflow-react dev\" \"pnpm --filter primflow-react-example dev:dist\"",
     "build": "pnpm --filter './packages/*' build && pnpm run verify",
     "build:all": "pnpm -r run build",
     "verify": "node scripts/verify-boundaries.mjs",

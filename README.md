@@ -1,33 +1,33 @@
-# Workflow JS
+# Prim flow
 
 English | [简体中文](README.zh-CN.md)
 
 A visual programming toolkit built around nodes and connections. A single graph definition connects editing, execution, and debugging, making the toolkit suitable for embedded workflow editors, data processing tools, and AI workflow applications. The repository contains four libraries and a runnable React example.
 
-Try the [live React example](https://lyx-pj.github.io/workflow-js/).
+Try the [live React example](https://lyx-pj.github.io/primflow-js/).
 
 ## Packages and capabilities
 
 | Package                   | Purpose                                            | Documentation                                |
 | ------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `@lyx-pj/workflow-model`  | Define workflow data structures                    | [README](packages/workflow-model/README.md)  |
-| `@lyx-pj/workflow-engine` | Execute workflows                                  | [README](packages/workflow-engine/README.md) |
-| `@lyx-pj/workflow-canvas` | Edit workflows visually with English or Chinese UI | [README](packages/workflow-canvas/README.md) |
-| `@lyx-pj/workflow-react`  | Use workflows in React applications                | [README](packages/workflow-react/README.md)  |
+| `@lyx-pj/primflow-model`  | Define workflow data structures                    | [README](packages/primflow-model/README.md)  |
+| `@lyx-pj/primflow-engine` | Execute workflows                                  | [README](packages/primflow-engine/README.md) |
+| `@lyx-pj/primflow-canvas` | Edit workflows visually with English or Chinese UI | [README](packages/primflow-canvas/README.md) |
+| `@lyx-pj/primflow-react`  | Use workflows in React applications                | [README](packages/primflow-react/README.md)  |
 
 ## Quick start
 
 Install the packages in an existing React 18 or 19 project:
 
 ```bash
-npm install @lyx-pj/workflow-react @lyx-pj/workflow-canvas @lyx-pj/workflow-engine
+npm install @lyx-pj/primflow-react @lyx-pj/primflow-canvas @lyx-pj/primflow-engine
 ```
 
 Add the following to `App.tsx` to mount an editor:
 
 ```tsx
-import { NodeRegistry } from '@lyx-pj/workflow-canvas'
-import { createGraphContext, GraphView } from '@lyx-pj/workflow-react'
+import { NodeRegistry } from '@lyx-pj/primflow-canvas'
+import { createGraphContext, GraphView } from '@lyx-pj/primflow-react'
 
 const { GraphProvider, useGraph } = createGraphContext(new NodeRegistry())
 
@@ -45,7 +45,7 @@ export default function App() {
 }
 ```
 
-This example mounts the editor. See the [React guide](packages/workflow-react/README.md) to register custom nodes and connect workflow execution. For execution without a UI, use [engine](packages/workflow-engine/README.md) directly.
+This example mounts the editor. See the [React guide](packages/primflow-react/README.md) to register custom nodes and connect workflow execution. For execution without a UI, use [engine](packages/primflow-engine/README.md) directly.
 
 ## Run the repository example
 
