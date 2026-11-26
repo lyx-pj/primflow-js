@@ -21,10 +21,10 @@ function json(nodes: JsonNode[] = [], links: JsonLink[] = [], subgraphs: JsonGra
 function graphNode(id: string, type: string, nodeType = type, extra: Partial<JsonNode> = {}): JsonNode {
   return {
     id,
-    type,
-    nodeType,
+    kind: type,
+    definitionId: nodeType,
     position: { x: 0, y: 0 },
-    values: {},
+    inputValues: {},
     inputs: [],
     outputs: [],
     ...extra,
@@ -32,7 +32,7 @@ function graphNode(id: string, type: string, nodeType = type, extra: Partial<Jso
 }
 
 function callNode(id: string, subgraphId: string): JsonNode {
-  return graphNode(id, 'subgraph', 'subgraph', { subgraphId, title: '调用子图' })
+  return graphNode(id, 'subgraph', 'subgraph', { targetGraphId: subgraphId, title: '调用子图' })
 }
 
 function meta(id: string, name: string, type: ViewMeta['type'] = 'view'): ViewMeta {
@@ -75,7 +75,7 @@ const { graph, state } = vi.hoisted(() => {
     toJSON: vi.fn(() => state.json),
     clear: vi.fn(() => {
       state.json = {
-        nodes: [{ id: 'start-root', type: 'start', nodeType: 'start', position: { x: 300, y: 300 }, values: {}, inputs: [], outputs: [] }],
+        nodes: [{ id: 'start-root', kind: 'start', definitionId: 'start', position: { x: 300, y: 300 }, inputValues: {}, inputs: [], outputs: [] }],
         links: [],
         variables: [],
         subgraphs: {},
@@ -94,10 +94,10 @@ const { graph, state } = vi.hoisted(() => {
     addNode: vi.fn((value: NodeInstance<typeof EndClass>) => {
       state.json.nodes.push({
         id: `end-${state.json.nodes.length}`,
-        type: 'end',
-        nodeType: 'end',
+        kind: 'end',
+        definitionId: 'end',
         position: value.position,
-        values: {},
+        inputValues: {},
         inputs: [],
         outputs: [],
       })
@@ -171,13 +171,13 @@ test('子图文件的根 Start 改成跨文件唯一 id，连线同步更新', (
 
   ensureSubgraphStartId(data, 'sub-1')
 
-  expect(data.nodes.find((node) => node.type === 'start')?.id).toBe('start-sub-1')
+  expect(data.nodes.find((node) => node.kind === 'start')?.id).toBe('start-sub-1')
   expect(data.links[0].source.id).toBe('start-sub-1')
   // A file whose id is already unique is not renamed again.
-  const old = data.nodes.find((node) => node.type === 'start')!
+  const old = data.nodes.find((node) => node.kind === 'start')!
   old.id = 'start-custom'
   ensureSubgraphStartId(data, 'sub-2')
-  expect(data.nodes.find((node) => node.type === 'start')?.id).toBe('start-custom')
+  expect(data.nodes.find((node) => node.kind === 'start')?.id).toBe('start-custom')
 })
 
 test('添加面板按子图文件展开条目，排除当前文件', () => {
@@ -198,7 +198,7 @@ test('添加面板按子图文件展开条目，排除当前文件', () => {
     title: '退款子图',
     category: '子图',
   })
-  expect(entries[0].defaults).toEqual({ subgraphId: 'sub-b', title: '退款子图' })
+  expect(entries[0].defaults).toEqual({ targetGraphId: 'sub-b', title: '退款子图' })
 })
 
 test('执行组装按引用递归读取独立子图文件，并带上子图文件里的循环体', async () => {
@@ -273,7 +273,7 @@ test('执行组装拦截循环引用和缺失的子图文件', async () => {
 test('组装后的独立子图文件可以直接交给引擎执行', async () => {
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const call = node('subgraph', 'call-sub')
-  call.subgraphId = 'sub'
+  call.targetGraphId = 'sub'
   const rootGraph = json(
     [node('start', 'main-start'), call, node('Print', 'after')],
     [link('main-start', 'start', 'call-sub', 'subgraph'), link('call-sub', 'subgraph', 'after')],
@@ -292,7 +292,7 @@ test('组装后的独立子图文件可以直接交给引擎执行', async () =>
     isRegistered: () => true,
   })
   const instance = createEngine(merged.nodes, merged.links, merged.subgraphs)
-  await instance.process()
+  await instance.start()
 
   expect(instance.getNodeStatus('sub-print')).toBe('completed')
   expect(instance.getNodeStatus('after')).toBe('completed')
@@ -308,8 +308,8 @@ test('新建子图会保存为独立文件、带 Start + End，并出现在文�
 
   const saved = fakeStorage.saveView.mock.calls.at(-1)![0]
   expect(saved).toMatchObject({ name: '订单校验', type: 'subgraph' })
-  expect(saved.data.nodes.map((node) => node.type).sort()).toEqual(['end', 'start'])
-  expect(saved.data.nodes.find((node) => node.type === 'start')?.id).toBe(`start-${saved.id}`)
+  expect(saved.data.nodes.map((node) => node.kind).sort()).toEqual(['end', 'start'])
+  expect(saved.data.nodes.find((node) => node.kind === 'start')?.id).toBe(`start-${saved.id}`)
   expect(hook.views.find((view) => view.id === saved.id)?.type).toBe('subgraph')
   expect(hook.currentViewId).toBe(saved.id)
 })

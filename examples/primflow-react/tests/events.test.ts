@@ -1,6 +1,6 @@
 import './language'
 import { afterEach, expect, test, vi } from 'vitest'
-import type { ExecContext, NodeLifecycleContext } from '@lyx-pj/primflow-model'
+import type { NodeExecutionContext, NodeLifecycleContext } from '@lyx-pj/primflow-model'
 import { EventListener, EventTrigger } from '../packages/workflow/nodes/Event'
 import { createEngine, link, node, stopEngines } from './helpers'
 
@@ -10,12 +10,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function execContext(values: Record<string, unknown>): ExecContext & {
+function execContext(values: Record<string, unknown>): NodeExecutionContext & {
   setOutput: ReturnType<typeof vi.fn>
   next: ReturnType<typeof vi.fn>
   emitEvent: ReturnType<typeof vi.fn>
 } {
   return {
+    state: { get: () => undefined, snapshot: () => ({ version: 0, values: {} }), update: vi.fn() },
     getInput: <T>(name: string) => values[name] as T | undefined,
     setOutput: vi.fn(),
     next: vi.fn(),
@@ -34,10 +35,10 @@ function lifecycleContext(values: Record<string, unknown>) {
   const state: Record<string, unknown> = {}
   const ctx = {
     getInput: (name: string) => values[name],
-    state,
+    nodeState: state,
     emitEvent,
     onCleanup: (cleanup: () => void) => cleanups.push(cleanup),
-    onEvent: (name: string) => {
+    on: (name: string) => {
       subscribed.push(name)
       const unsubscribe = vi.fn()
       unsubscribes.push(unsubscribe)
@@ -101,7 +102,7 @@ test('事件触发后监听节点在独立任务中执行下游，事件数据�
       link('listener', 'payload', 'listener-print', 'message'),
     ]
   )
-  await instance.process()
+  await instance.start()
   await vi.waitFor(() => {
     expect(instance.getNodeExecutionData('listener')?.outputs).toMatchObject({
       payload: '你好，事件',
@@ -125,7 +126,7 @@ test('停止运行后监听退订，重新执行时在新会话中重新订阅�
     [node('start'), node('EventListener', 'listener'), node('Print', 'print')],
     [link('listener', 'exec', 'print'), link('listener', 'payload', 'print', 'message')]
   )
-  await instance.process()
+  await instance.start()
   expect((await instance.dispatchEvent('demo:message', '第一次'))?.status).toBe('completed')
   expect(instance.getNodeExecutionData('listener')?.outputs).toMatchObject({ payload: '第一次', count: 1 })
 
@@ -133,7 +134,7 @@ test('停止运行后监听退订，重新执行时在新会话中重新订阅�
   await instance.whenStopped()
   expect(await instance.dispatchEvent('demo:message', '停止后')).toBeUndefined()
 
-  await instance.process()
+  await instance.start()
   expect((await instance.dispatchEvent('demo:message', '第二次运行'))?.status).toBe('completed')
   expect(instance.getNodeExecutionData('listener')?.outputs).toMatchObject({ payload: '第二次运行', count: 1 })
 })

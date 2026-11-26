@@ -10,6 +10,7 @@ import {
   type SaveStatus,
 } from '../packages/workflow'
 import { ViewSwitcher } from './components/ViewSwitcher'
+import { ApprovalPanel } from './components/ApprovalPanel'
 
 function formatTime(timestamp: number, language: AppLanguage) {
   return new Date(timestamp).toLocaleTimeString(language === 'zh' ? 'zh-CN' : 'en-US', { hour12: false })
@@ -103,6 +104,7 @@ function Workflow() {
         </div>
       )}
       <SaveIndicator status={saveStatus} language={language} />
+      <ApprovalPanel language={language} />
       {booting && (
         <div role="status" className="workflow-loading">
           {translate(language, 'app.loading')}
@@ -116,7 +118,7 @@ function App() {
   return (
     <GraphProvider>
       <EngineProvider>
-        <div className="h-screen w-screen select-none">
+        <div className="h-screen w-screen select-none max-md:pt-12">
           <Workflow />
         </div>
       </EngineProvider>

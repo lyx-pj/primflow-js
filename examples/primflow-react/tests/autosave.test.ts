@@ -144,10 +144,10 @@ test('存档恢复失败时不自动保存，保留原存档等待手动覆盖',
         nodes: [
           {
             id: 'legacy',
-            nodeType: 'OpenRouter',
-            type: 'default',
+            definitionId: 'OpenRouter',
+            kind: 'default',
             position: { x: 0, y: 0 },
-            values: {},
+            inputValues: {},
             inputs: [],
             outputs: [],
           },

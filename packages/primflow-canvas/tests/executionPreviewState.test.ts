@@ -7,6 +7,7 @@ import { Engine } from '../../primflow-engine/src/Engine'
 import { defineExecutor } from '../../primflow-engine/src/ExecutorDefinition'
 import { BlueprintModel } from '../src/GraphModel'
 import { bindWorkflowEvents } from '../../../examples/primflow-react/packages/workflow/events'
+import type { DebugPanelData, DebugPanelOptions } from '../src/ui/types'
 
 // Replace only JointJS views; retain real Graph, Engine, and example event wiring to verify pause timing.
 vi.mock('../src/adapters/GraphAdapter', () => ({
@@ -162,5 +163,110 @@ test('pause notifications expose actual inputs, resume clears them, completion s
     dispose()
     finish?.()
     await process
+  }
+})
+
+
+test('selecting history replays its task graph with isolated node data and logs, then restores editing', async () => {
+  const registry = new NodeRegistry().register('step', Step)
+  const graph = new Graph(registry)
+  const engine = new Engine(registry)
+  engine.registerExecutor(defineExecutor(Step, async (ctx) => {
+    ctx.setOutput('value', ctx.getInput('value'))
+  }))
+  const json: JsonGraph = {
+    nodes: [
+      { id: 'start', definitionId: 'start', kind: 'start', position: { x: 0, y: 0 }, inputValues: {},
+        inputs: [], outputs: [{ name: 'start', type: 'exec', id: 'out-exec' }] },
+      { id: 'step', definitionId: 'step', kind: 'default', position: { x: 0, y: 0 }, inputValues: { value: 7 },
+        inputs: [{ name: 'exec', type: 'exec', id: 'in-exec' }, { name: 'value', type: 'any', id: 'in-value' }],
+        outputs: [{ name: 'value', type: 'any', id: 'out-value' }] },
+    ],
+    links: [
+      { id: 'exec', source: { id: 'start', port: 'out-exec' }, target: { id: 'step', port: 'in-exec' } },
+    ],
+    subgraphs: {}, variables: [], viewport: { x: 0, y: 0, zoom: 1 },
+  }
+  engine.loadGraph(json)
+  const dispose = bindWorkflowEvents(graph, engine)
+  try {
+    await engine.start()
+    const task = engine.getTasks()[0]
+    expect(task?.status).toBe('completed')
+    const options = graph.options.debugPanel as DebugPanelOptions
+    expect(options.onRecordSelect).toBeTypeOf('function')
+    const record = {
+      id: task.id,
+      title: 'Run main workflow',
+      status: 'completed' as const,
+      startedAt: task.startedAt,
+      endedAt: task.endedAt,
+    }
+
+    options.onRecordSelect?.(record)
+    expect(graph.isReplayMode()).toBe(true)
+    expect(graph.getNodes().map((node) => node.id)).toEqual(expect.arrayContaining(['start', 'step']))
+    expect(graph.getNodeExecutionStatus('step')).toBe('completed')
+    expect(graph.getNodeExecutionData('step')).toEqual({ inputs: { value: 7 }, outputs: { value: 7 } })
+
+    const data = typeof options.data === 'function' ? options.data() : options.data as DebugPanelData
+    // The panel log comes from the engine execution log of the selected task.
+    expect(data.logs?.some((entry) => entry.type === 'activation:status' && entry.nodeId === 'step')).toBe(true)
+    expect(data.logs?.some((entry) => entry.level === 'success' && entry.nodeId === 'step')).toBe(true)
+
+    options.onRecordSelect?.(null)
+    expect(graph.isReplayMode()).toBe(false)
+    expect(graph.getNodes().map((node) => node.id)).not.toContain('step')
+  } finally {
+    dispose()
+    engine.stop()
+    await engine.whenStopped()
+  }
+})
+
+test('current runs are listed with their live status and stay selectable after stopping', async () => {
+  const registry = new NodeRegistry().register('step', Step)
+  const graph = new Graph(registry)
+  const engine = new Engine(registry)
+  engine.registerExecutor(defineExecutor(Step, async (ctx) => {
+    ctx.setOutput('value', ctx.getInput('value'))
+  }))
+  const json: JsonGraph = {
+    nodes: [
+      { id: 'start', definitionId: 'start', kind: 'start', position: { x: 0, y: 0 }, inputValues: {},
+        inputs: [], outputs: [{ name: 'start', type: 'exec', id: 'out-exec' }] },
+      { id: 'step', definitionId: 'step', kind: 'default', position: { x: 0, y: 0 }, inputValues: { value: 1 },
+        inputs: [{ name: 'exec', type: 'exec', id: 'in-exec' }, { name: 'value', type: 'any', id: 'in-value' }],
+        outputs: [{ name: 'value', type: 'any', id: 'out-value' }] },
+    ],
+    links: [
+      { id: 'exec', source: { id: 'start', port: 'out-exec' }, target: { id: 'step', port: 'in-exec' } },
+    ],
+    subgraphs: {}, variables: [], viewport: { x: 0, y: 0, zoom: 1 },
+  }
+  engine.loadGraph(json)
+  const dispose = bindWorkflowEvents(graph, engine)
+  const records = () => {
+    const options = graph.options.debugPanel as DebugPanelOptions
+    const data = typeof options.data === 'function' ? options.data() : options.data as DebugPanelData
+    return data.records ?? []
+  }
+  try {
+    await engine.start()
+    // Nodes have finished, but the session remains active until the user stops it.
+    expect(engine.status).toBe('running')
+    const task = engine.getTasks()[0]!
+    expect(task.status).toBe('completed')
+    // The running task is listed with its live status.
+    expect(records()).toHaveLength(1)
+    expect(records()[0]).toMatchObject({ id: task.id, status: 'completed' })
+
+    engine.stop()
+    await engine.whenStopped()
+    expect(records().map((record) => record.id)).toContain(task.id)
+  } finally {
+    dispose()
+    engine.stop()
+    await engine.whenStopped()
   }
 })

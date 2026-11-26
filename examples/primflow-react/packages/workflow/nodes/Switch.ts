@@ -1,12 +1,11 @@
-import { Node } from '@lyx-pj/primflow-model'
-import type { ExecutorFn } from '@lyx-pj/primflow-engine'
+import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
 
-export class Switch extends Node {
-  static get definition() {
+export const Switch = defineNode({
+  get definition() {
     return {
-      type: 'switch',
-      title: localize('Switch', '多路分支'),
+      kind: 'switch',
+      name: localize('Switch', '多路分支'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'condition', type: 'string', label: localize('Match value', '匹配值') },
@@ -28,9 +27,9 @@ export class Switch extends Node {
         },
       },
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = ({ getInput, setOutput, next, inputs }) => {
+  executor: ({ getInput, setOutput, next, inputs }) => {
     const condition = getInput<string>('condition') ?? ''
     let outputKey = ''
     setOutput('condition', condition)
@@ -48,5 +47,5 @@ export class Switch extends Node {
     } else {
       next(['default'])
     }
-  }
-}
+  },
+})

@@ -1,7 +1,8 @@
 import type { Graph, NodeClassType, PaletteEntry } from '@lyx-pj/primflow-canvas'
-import type { JsonGraph, JsonNode } from '@lyx-pj/primflow-model'
+import { getJsonNodeDefinitionId, type JsonGraph, type JsonNode } from '@lyx-pj/primflow-model'
 import type { ViewMeta } from './storage'
 import { getLanguage, listSeparator, quoteName, translate } from './i18n'
+import { normalizeDataOnlyPorts } from './nodes/normalize-inputs'
 
 /**
  * Expand subgraph files into palette entries.
@@ -25,7 +26,7 @@ export function buildSubgraphPaletteEntries<NodeDefs extends Record<string, Node
       iconClass: 'ri-node-tree',
       description: translate(language, 'palette.callSubgraph', { name: quoteName(file.name, language) }),
       keywords: ['subgraph', '子图', file.name],
-      defaults: { subgraphId: file.id, title: file.name },
+      defaults: { targetGraphId: file.id, title: file.name },
     }))
 }
 
@@ -39,7 +40,7 @@ function validateNodeTypes(
   isRegistered: (nodeType: string) => boolean,
 ) {
   const nodes = [...data.nodes, ...Object.values(data.subgraphs).flatMap((region) => region.nodes)]
-  const unsupported = [...new Set(nodes.map((node) => node.nodeType))].filter((type) => !isRegistered(type))
+  const unsupported = [...new Set(nodes.map(getJsonNodeDefinitionId))].filter((type) => !isRegistered(type))
   if (unsupported.length) {
     throw new Error(
       translate(getLanguage(), 'error.subgraphRemovedNodes', {
@@ -104,8 +105,8 @@ export async function assembleExecutionGraph(options: {
       ...Object.values(data.subgraphs).flatMap((region) => region.nodes),
     ]
     for (const node of nodes) {
-      if (node.type !== 'subgraph' || !node.subgraphId) continue
-      const subgraphId = node.subgraphId
+      const subgraphId = node.targetGraphId
+      if (node.kind !== 'subgraph' || !subgraphId) continue
       // Check the current recursion path before skipping loaded regions; otherwise cycles like A→B→C→B are missed.
       if (stack.includes(subgraphId)) {
         const chain = [...stack, subgraphId].map((id) => regionLabel(filesById, id)).join(' → ')
@@ -130,10 +131,11 @@ export async function assembleExecutionGraph(options: {
           }),
         )
       }
-      const data = await load(subgraphId)
-      if (!data) {
+      const saved = await load(subgraphId)
+      if (!saved) {
         throw new Error(translate(getLanguage(), 'error.subgraphRead', { name: quoteName(meta.name) }))
       }
+      const data = normalizeDataOnlyPorts(saved)
       validateNodeTypes(data, meta.name, isRegistered)
       merged.subgraphs[subgraphId] = {
         nodes: data.nodes,

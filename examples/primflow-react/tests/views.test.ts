@@ -284,6 +284,37 @@ test('新增视图会清空画布并切换过去', async () => {
   expect(hook.currentViewId).toBe(created.id)
 })
 
+test('新建视图会先保存当前视图的改动，再切换到新文件', async () => {
+  const original = graphData('existing')
+  seedView({ id: 'a', name: '视图 A', data: original, updatedAt: 10 })
+  await render()
+  vi.clearAllMocks()
+  graph.toJSON.mockReturnValueOnce(original)
+
+  await act(async () => hook.createView('新视图'))
+
+  const [saved, created] = fakeStorage.saveView.mock.calls.map(([record]) => record)
+  // The source file is saved before the switch, so its edits are not lost.
+  expect(saved).toMatchObject({ id: 'a', data: original })
+  expect(created).toMatchObject({ type: 'view', name: '新视图' })
+  expect(created.id).not.toBe('a')
+  expect(hook.currentViewId).toBe(created.id)
+})
+
+test('新文件保存失败时保留当前视图和画布', async () => {
+  await render()
+  const originalId = hook.currentViewId
+  vi.clearAllMocks()
+  fakeStorage.saveView.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('存储不可用'))
+
+  await act(async () => hook.createView('新视图'))
+
+  expect(hook.currentViewId).toBe(originalId)
+  expect(hook.views).toHaveLength(1)
+  expect(graph.fromJSON).not.toHaveBeenCalled()
+  expect(hook.saveStatus).toMatchObject({ state: 'error', message: '存储不可用' })
+})
+
 test('重命名视图会更新列表和存储，不影响当前视图', async () => {
   seedView({ id: 'a', name: '视图 A', data: graphData('a'), updatedAt: 10 })
   seedView({ id: 'b', name: '视图 B', data: graphData('b'), updatedAt: 20 })
@@ -400,10 +431,10 @@ test('视图里的节点类型已被移除时提示失败且不覆盖存档', as
     nodes: [
       {
         id: 'legacy',
-        nodeType: 'OpenRouter',
-        type: 'default',
+        definitionId: 'OpenRouter',
+        kind: 'default',
         position: { x: 0, y: 0 },
-        values: {},
+        inputValues: {},
         inputs: [],
         outputs: [],
       },
@@ -425,10 +456,10 @@ test('恢复失败的视图在切换时不会被空画布覆盖', async () => {
     nodes: [
       {
         id: 'legacy',
-        nodeType: 'OpenRouter',
-        type: 'default',
+        definitionId: 'OpenRouter',
+        kind: 'default',
         position: { x: 0, y: 0 },
-        values: {},
+        inputValues: {},
         inputs: [],
         outputs: [],
       },

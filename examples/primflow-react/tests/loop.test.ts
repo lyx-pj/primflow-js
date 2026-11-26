@@ -17,14 +17,14 @@ afterEach(() => {
 
 const config: LoopConfig = { ...DEFAULT_LOOP_CONFIG, maxIterations: 10 }
 
-/** The loop node holds subgraphId and loop config; its ports come from the built-in loop definition. */
+/** The loop node holds targetGraphId and loop config; its ports come from the built-in loop definition. */
 function loopNode(
   id: string,
   bodyId: string,
   values: Record<string, unknown> = {},
   loopConfig: LoopConfig = config
 ): JsonNode {
-  return { ...node('loop', id, values), subgraphId: bodyId, loop: loopConfig }
+  return { ...node('loop', id, values), targetGraphId: bodyId, loop: loopConfig }
 }
 
 function body(nodes: JsonNode[], links: JsonLink[]): JsonGraph['subgraphs'] {
@@ -60,7 +60,7 @@ test('循环节点使用内置 loop 定义，端口契约与面板默认配置�
   expect(demoNodes.loop.loop).toEqual(DEFAULT_LOOP_CONFIG)
 
   const definition = registry.get('loop').definition
-  expect(definition.type).toBe('loop')
+  expect(definition.kind).toBe('loop')
   expect(definition.inputs.filter((port) => port.type === 'exec').map((port) => port.name)).toEqual(['exec'])
   expect(definition.outputs.filter((port) => port.type === 'exec').map((port) => port.name)).toEqual(['done'])
   // The loop has one data input and one data output; other state is maintained inside the loop.
@@ -82,7 +82,7 @@ test('循环体反复执行，结束条件由循环体自己决定，输出是�
     countingBody()
   )
 
-  await instance.process()
+  await instance.start()
 
   // Initial value 0, increment each round: 1, 2, 3 continue; round 4 satisfies the condition and ends.
   expect(instance.getNodeExecutionData('loop')?.outputs).toMatchObject({ output: 4 })
@@ -127,7 +127,7 @@ test('上一轮提交的值成为下一轮的入口值，循环体可以自己�
     )
   )
 
-  await instance.process()
+  await instance.start()
 
   // Each round's entry value is the previous round's submitted value: 0, 1, 2, 3.
   expect(log.mock.calls.map((call) => call[0])).toEqual([0, 1, 2, 3, 'done'])
@@ -153,7 +153,7 @@ test('循环体用 break 结束，结束原因和最后一轮提交的值都能�
     )
   )
 
-  await instance.process()
+  await instance.start()
 
   expect(log.mock.calls.map((call) => call[0])).toEqual(['round', 'done'])
   expect(instance.getNodeExecutionData('loop')?.outputs).toMatchObject({ output: 'round' })
@@ -162,6 +162,22 @@ test('循环体用 break 结束，结束原因和最后一轮提交的值都能�
     reason: 'break',
     state: 'round',
   })
+})
+
+test('循环体按需读取基础输入，可直接把对象作为循环结果', async () => {
+  const value = { enabled: false, items: [1, 2] }
+  const instance = createEngine(
+    [node('start'), loopNode('loop', 'loop-body')],
+    [link('start', 'start', 'loop')],
+    body(
+      [node('loop-entry', 'entry'), node('ObjectInput', 'input', { value }), node('loop-return', 'return')],
+      [link('entry', 'exec', 'return', 'break'), link('input', 'value', 'return', 'value')],
+    ),
+  )
+
+  await instance.start()
+  expect(instance.getNodeExecutionData('loop')?.outputs).toEqual({ output: value })
+  expect(instance.getNodeStatus('input')).toBe('idle')
 })
 
 test('画布新建循环体自带的入口→返回连线没有结束条件，会一直执行到轮数上限', async () => {
@@ -179,7 +195,7 @@ test('画布新建循环体自带的入口→返回连线没有结束条件，�
     )
   )
 
-  await instance.process()
+  await instance.start()
 
   // Without an exit condition, partial results are not published and the done branch is not reached.
   expect(log.mock.calls.map((call) => call[0])).toEqual([])

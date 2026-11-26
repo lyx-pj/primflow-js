@@ -131,6 +131,8 @@ class FakeDatabase {
     return { name, keyPath: options?.keyPath ?? 'id' }
   }
 
+  close() {}
+
   deleteObjectStore(name: string) {
     this.stores.delete(name)
   }

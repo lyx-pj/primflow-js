@@ -1,13 +1,12 @@
-import { Node } from '@lyx-pj/primflow-model'
-import type { ExecutorFn } from '@lyx-pj/primflow-engine'
+import { defineNode, NodeExecutionError } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
 
 const style = { header: { background: '#6850a1', color: '#fff' } }
 
-export class TextTemplate extends Node {
-  static get definition() {
+export const TextTemplate = defineNode({
+  get definition() {
     return {
-      title: localize('Text Template', '文本模板'),
+      name: localize('Text Template', '文本模板'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'template', type: 'string', label: localize('Template', '模板') },
@@ -19,9 +18,9 @@ export class TextTemplate extends Node {
       ] as const,
       style,
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = ({ getInput, setOutput, next }) => {
+  executor: ({ getInput, setOutput, next }) => {
     const template = getInput<string>('template') ?? ''
     // Use a callback replacement so characters like $& in the input are not interpreted as replacement directives.
     setOutput(
@@ -29,13 +28,13 @@ export class TextTemplate extends Node {
       template.replaceAll('{{value}}', () => String(getInput('value') ?? ''))
     )
     next()
-  }
-}
+  },
+})
 
-export class TextSplit extends Node {
-  static get definition() {
+export const TextSplit = defineNode({
+  get definition() {
     return {
-      title: localize('Split Text', '拆分文本'),
+      name: localize('Split Text', '拆分文本'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'text', type: 'string', label: localize('Text', '文本') },
@@ -48,12 +47,49 @@ export class TextSplit extends Node {
       ] as const,
       style,
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = ({ getInput, setOutput, next }) => {
+  executor: ({ getInput, setOutput, next }) => {
     const items = (getInput<string>('text') ?? '').split(getInput<string>('separator') ?? ',')
     setOutput('items', items)
     setOutput('count', items.length)
     next()
-  }
-}
+  },
+})
+
+
+export const CheckString = defineNode({
+  retryPolicy: { idempotent: true, maxRetries: 2 },
+
+  get definition() {
+    return {
+      name: localize('Check String', '校验字符串'),
+      inputs: [
+        { name: 'exec', type: 'exec' },
+        { name: 'value', type: 'any', label: localize('Actual value', '实际值') },
+        { name: 'expected', type: 'string', label: localize('Expected string', '期望字符串') },
+      ] as const,
+      outputs: [
+        { name: 'exec', type: 'exec' },
+        { name: 'value', type: 'string', label: localize('Validated string', '通过校验的字符串') },
+      ] as const,
+      style,
+    } as const
+  },
+
+  executor: ({ getInput, setOutput, next }) => {
+    const value = getInput('value')
+    const expected = getInput<string>('expected') ?? ''
+    if (value !== expected) {
+      throw new NodeExecutionError(localize('The value does not match the expected string', '实际值与期望字符串不一致'), {
+        kind: 'input',
+        code: 'STRING_MISMATCH',
+        inputPort: 'value',
+        retryable: true,
+        details: { expected },
+      })
+    }
+    setOutput('value', value)
+    return next()
+  },
+})

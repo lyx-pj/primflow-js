@@ -1,7 +1,8 @@
 import type { Graph, NodeClassType } from '@lyx-pj/primflow-canvas'
-import type { JsonGraph } from '@lyx-pj/primflow-model'
+import { getJsonNodeDefinitionId, type JsonGraph } from '@lyx-pj/primflow-model'
 import type { ViewMeta } from './storage'
 import { getLanguage, listSeparator, translate, type AppLanguage } from './i18n'
+import { normalizeDataOnlyPorts } from './nodes/normalize-inputs'
 
 let viewSeq = 0
 
@@ -34,7 +35,7 @@ export function restoreGraph<NodeDefs extends Record<string, NodeClassType>>(
   options: { keepStartPorts?: boolean } = {},
 ) {
   const nodes = [...data.nodes, ...Object.values(data.subgraphs ?? {}).flatMap((subgraph) => subgraph.nodes)]
-  const unsupported = [...new Set(nodes.map((node) => node.nodeType))].filter(
+  const unsupported = [...new Set(nodes.map(getJsonNodeDefinitionId))].filter(
     (type) => !graph.nodeRegistry.isRegistered(type as keyof typeof graph.nodeRegistry.registry)
   )
   if (unsupported.length) {
@@ -44,6 +45,7 @@ export function restoreGraph<NodeDefs extends Record<string, NodeClassType>>(
       }),
     )
   }
+  data = normalizeDataOnlyPorts(data)
   // Only subgraph files keep entry parameter ports; ordinary views use the default load behavior.
   if (options.keepStartPorts) graph.fromJSON(data, options)
   else graph.fromJSON(data)
@@ -62,7 +64,7 @@ export function toViewMeta(view: { id: string; name: string; type: ViewMeta['typ
  * Rename it when creating a subgraph file; links update too, and canvas-generated node ids are already unique enough.
  */
 export function ensureSubgraphStartId(data: JsonGraph, recordId: string): JsonGraph {
-  const start = data.nodes.find((node) => node.type === 'start' && node.id === 'start-root')
+  const start = data.nodes.find((node) => node.kind === 'start' && node.id === 'start-root')
   if (!start) return data
   let nextId = `start-${recordId}`
   let suffix = 1

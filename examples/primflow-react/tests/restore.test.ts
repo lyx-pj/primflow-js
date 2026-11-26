@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { JsonGraph } from '@lyx-pj/primflow-model'
 import { useWorkflow } from '../packages/workflow/use-workflow'
 import { fakeStorage, resetFakeStorage, seedView } from './fake-storage'
+import { link, node } from './helpers'
 
 const { graph } = vi.hoisted(() => ({
   graph: {
@@ -61,7 +62,8 @@ afterEach(async () => {
   container.remove()
 })
 
-test('视图包含已移除节点时，明确提示且不部分恢复或覆盖存档', async () => {
+test.each(['OpenRouter', 'AnyInput'])('存档包含已移除的 %s 时，保留原文件并提示', async (removedType) => {
+  graph.nodeRegistry.isRegistered = (type: string) => type !== removedType
   const json = savedGraph()
   json.subgraphs.child = {
     viewport: json.viewport,
@@ -69,10 +71,10 @@ test('视图包含已移除节点时，明确提示且不部分恢复或覆盖�
     nodes: [
       {
         id: 'legacy',
-        nodeType: 'OpenRouter',
-        type: 'default',
+        definitionId: removedType,
+        kind: 'default',
         position: { x: 0, y: 0 },
-        values: {},
+        inputValues: {},
         inputs: [],
         outputs: [],
       },
@@ -82,11 +84,46 @@ test('视图包含已移除节点时，明确提示且不部分恢复或覆盖�
 
   await act(async () => root.render(createElement(Workflow)))
 
-  expect(container.textContent).toContain('存档包含已移除的节点：OpenRouter')
+  expect(container.textContent).toContain(`存档包含已移除的节点：${removedType}`)
   expect(container.textContent).toContain('原存档仍保留')
   expect(graph.fromJSON).not.toHaveBeenCalled()
   expect(fakeStorage.saveView).not.toHaveBeenCalled()
 })
+
+test.each([['TextInput', 'value', '你好，工作流'], ['GetVariable', 'name', 'status']] as const)(
+  '旧存档绕过 %s 已移除的执行端口并保留数据线',
+  async (nodeType, inputName, inputValue) => {
+    const json = savedGraph()
+    const legacyInput = (id: string) => {
+      const input = node(nodeType, id)
+      return {
+        ...input,
+        breakpoint: true,
+        inputs: [{ name: 'exec', id: 'in-exec', type: 'exec' }, ...input.inputs.filter((port) => port.type !== 'exec')],
+        outputs: [{ name: 'exec', id: 'out-exec', type: 'exec' }, ...input.outputs.filter((port) => port.type !== 'exec')],
+      }
+    }
+    const data = link('second', 'value', 'Print', 'message')
+    json.nodes = [node('start'), legacyInput('first'), legacyInput('second'), node('Print')]
+    json.links = [link('start', 'start', 'first'), link('first', 'exec', 'second'), link('second', 'exec', 'Print'), data]
+    json.subgraphs.child = { nodes: json.nodes, links: json.links, viewport: json.viewport }
+    seedView({ id: 'a', name: '视图 A', data: json, updatedAt: 10 })
+
+    await act(async () => root.render(createElement(Workflow)))
+
+    const [[restored]] = graph.fromJSON.mock.calls as [[JsonGraph]]
+    for (const region of [restored, restored.subgraphs.child]) {
+      expect(region.links).toContainEqual(data)
+      expect(region.links).toContainEqual(expect.objectContaining({ source: { id: 'start', port: 'out-start' }, target: { id: 'Print', port: 'in-exec' } }))
+      expect(region.links).toHaveLength(2)
+      expect(region.nodes.find((item) => item.id === 'first')).toMatchObject({
+        breakpoint: false, inputValues: { [inputName]: inputValue },
+        inputs: [{ name: inputName, id: `in-${inputName}` }], outputs: [{ name: 'value', id: 'out-value' }],
+      })
+    }
+    expect(json.links).toHaveLength(4)
+  },
+)
 
 test('正常存档照常恢复，读取失败时展示原因', async () => {
   const json = savedGraph()

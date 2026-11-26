@@ -1,19 +1,19 @@
-import { Node } from '@lyx-pj/primflow-model'
-import type { ExecutorFn } from '@lyx-pj/primflow-engine'
+import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
 
 const style = { header: { background: '#94642a', color: '#fff' } }
 
-export class MathOperation extends Node {
-  static get definition() {
+export const MathOperation = defineNode({
+  get definition() {
     return {
-      title: localize('Arithmetic', '四则运算'),
+      name: localize('Arithmetic', '四则运算'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'a', type: 'number', label: localize('Value A', '数值 A') },
         {
           name: 'operation',
-          type: 'select',
+          type: 'string',
+          editor: 'select',
           label: localize('Operation', '运算'),
           options: localize(
             [
@@ -38,9 +38,9 @@ export class MathOperation extends Node {
       ] as const,
       style,
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = ({ getInput, setOutput, next }) => {
+  executor: ({ getInput, setOutput, next }) => {
     const a = getInput<number>('a') ?? 0
     const b = getInput<number>('b') ?? 0
     let result: number
@@ -63,19 +63,20 @@ export class MathOperation extends Node {
     }
     setOutput('result', result)
     next()
-  }
-}
+  },
+})
 
-export class Compare extends Node {
-  static get definition() {
+export const Compare = defineNode({
+  get definition() {
     return {
-      title: localize('Numeric Comparison', '数值比较'),
+      name: localize('Numeric Comparison', '数值比较'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'a', type: 'number', label: localize('Value A', '数值 A') },
         {
           name: 'operation',
-          type: 'select',
+          type: 'string',
+          editor: 'select',
           label: localize('Condition', '条件'),
           options: localize(
             [
@@ -100,9 +101,9 @@ export class Compare extends Node {
       ] as const,
       style,
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = ({ getInput, setOutput, next }) => {
+  executor: ({ getInput, setOutput, next }) => {
     const a = getInput<number>('a') ?? 0
     const b = getInput<number>('b') ?? 0
     let result: boolean
@@ -124,5 +125,5 @@ export class Compare extends Node {
     }
     setOutput('result', result)
     next()
-  }
-}
+  },
+})

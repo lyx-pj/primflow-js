@@ -1,13 +1,16 @@
 import { createRegistry } from '../nodes'
 import { demoPalette } from '../nodes/catalog'
 import { getLanguage, toolbarLabels } from '../i18n'
+import { registerAssetEditors } from './asset-editors'
+import { registerNodeRenderers } from './node-renderers'
+import { demoPanelSections } from './panel-sections'
 import { createGraphContext } from '@lyx-pj/primflow-react'
 
 const registry = createRegistry()
 const language = getLanguage()
 const toolbar = toolbarLabels(language)
 
-const graphOptions = {
+const canvasOptions = {
   language,
   background: '#000000',
   gridSize: 10,
@@ -17,6 +20,8 @@ const graphOptions = {
     thickness: 1,
   },
   palette: demoPalette,
+  // Demo node reshapes its own panel; other nodes keep the defaults.
+  nodePanel: { sections: demoPanelSections },
   contextMenu: {
     icons: {
       'add-node': 'ri-add-circle-line',
@@ -36,4 +41,10 @@ const graphOptions = {
   },
 }
 
-export const { GraphProvider, useGraph } = createGraphContext(registry, graphOptions)
+export const { GraphProvider, useGraph } = createGraphContext(registry, {
+  canvas: canvasOptions,
+  // Editors decide how an asset value is edited, on the port and in the panel.
+  editors: registerAssetEditors,
+  // Renderers decide how a node definition looks on the canvas.
+  nodeRenderers: registerNodeRenderers,
+})

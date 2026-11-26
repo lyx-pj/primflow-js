@@ -1,5 +1,5 @@
-import { Node } from '@lyx-pj/primflow-model'
-import type { ExecContext, ExecutorFn } from '@lyx-pj/primflow-engine'
+import { defineNode } from '@lyx-pj/primflow-model'
+import type { NodeExecutionContext } from '@lyx-pj/primflow-engine'
 import { localize } from '../i18n'
 
 const style = { header: { background: '#297964', color: '#fff' } }
@@ -84,16 +84,17 @@ function wait(ms: number, signal?: AbortSignal) {
  * On each trigger it calls next() to execute connected downstream nodes directly, without subscriptions or events.
  * The executor stays pending for the session; stopping cancels the wait through the task signal.
  */
-export class Timer extends Node {
-  static get definition() {
+export const Timer = defineNode({
+  get definition() {
     return {
       executionMode: 'source' as const,
-      title: localize('Timer', '定时器'),
+      name: localize('Timer', '定时器'),
       inputs: [
         { name: 'exec', type: 'exec' },
         {
           name: 'mode',
-          type: 'select',
+          type: 'string',
+          editor: 'select',
           label: localize('Trigger mode', '触发方式'),
           options: localize(
             [
@@ -109,7 +110,8 @@ export class Timer extends Node {
         { name: 'interval', type: 'number', label: localize('Interval', '间隔') },
         {
           name: 'unit',
-          type: 'select',
+          type: 'string',
+          editor: 'select',
           label: localize('Interval unit', '间隔单位'),
           options: localize(
             [
@@ -133,9 +135,9 @@ export class Timer extends Node {
       ] as const,
       style,
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = async ({ getInput, setOutput, next, signal }: ExecContext) => {
+  executor: async ({ getInput, setOutput, next, signal }: NodeExecutionContext) => {
     const schedule = resolveTimerSchedule({
       mode: getInput('mode'),
       interval: getInput('interval'),
@@ -152,5 +154,5 @@ export class Timer extends Node {
       // Run connected downstream nodes on every trigger until the task stops.
       next()
     }
-  }
-}
+  },
+})

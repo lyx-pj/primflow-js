@@ -224,7 +224,7 @@ export function ViewSwitcher({
 
   return (
     <>
-      <div className="fixed left-3 top-3 z-40">
+      <div className="view-switcher fixed left-3 top-14 z-40 max-md:inset-x-0 max-md:top-0 max-md:flex max-md:h-12 max-md:items-center max-md:border-b max-md:border-white/10 max-md:bg-canvas-panel max-md:px-3">
         <Listbox
           value={currentViewId}
           onChange={(value: string) => {

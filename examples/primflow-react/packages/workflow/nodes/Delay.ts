@@ -1,11 +1,10 @@
-import { Node } from '@lyx-pj/primflow-model'
-import type { ExecutorFn } from '@lyx-pj/primflow-engine'
+import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
 
-export class Delay extends Node {
-  static get definition() {
+export const Delay = defineNode({
+  get definition() {
     return {
-      title: localize('Delay', '等待'),
+      name: localize('Delay', '等待'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'duration', type: 'number', label: localize('Milliseconds', '毫秒') },
@@ -13,9 +12,9 @@ export class Delay extends Node {
       outputs: [{ name: 'exec', type: 'exec' }] as const,
       style: { header: { background: '#297964', color: '#fff' } },
     } as const
-  }
+  },
 
-  static executor: ExecutorFn = async ({ getInput, next, signal }) => {
+  executor: async ({ getInput, next, signal }) => {
     const duration = getInput<number>('duration') ?? 500
     if (!Number.isFinite(duration) || duration < 0 || duration > 60_000) {
       throw new Error(localize('Delay must be between 0 and 60000 milliseconds', '等待时间需在 0 至 60000 毫秒之间'))
@@ -32,5 +31,5 @@ export class Delay extends Node {
       signal?.addEventListener('abort', finish, { once: true })
     })
     if (!signal?.aborted) next()
-  }
-}
+  },
+})

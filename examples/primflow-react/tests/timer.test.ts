@@ -1,6 +1,6 @@
 import './language'
 import { afterEach, expect, test, vi } from 'vitest'
-import type { ExecContext } from '@lyx-pj/primflow-model'
+import type { NodeExecutionContext } from '@lyx-pj/primflow-model'
 import { demoNodes } from '../packages/workflow/nodes/catalog'
 import { Delay } from '../packages/workflow/nodes/Delay'
 import { Timer, nextTimerDelay, resolveTimerSchedule } from '../packages/workflow/nodes/Timer'
@@ -16,6 +16,7 @@ function timerContext(values: Record<string, unknown>, signal?: AbortSignal) {
   const setOutput = vi.fn()
   const next = vi.fn()
   const ctx = {
+    state: { get: () => undefined, snapshot: () => ({ version: 0, values: {} }), update: vi.fn() },
     getInput: <T>(name: string) => values[name] as T | undefined,
     setOutput,
     next,
@@ -24,13 +25,13 @@ function timerContext(values: Record<string, unknown>, signal?: AbortSignal) {
     outputs: [],
     services: { get: vi.fn() },
     signal,
-  } as unknown as ExecContext
+  } satisfies NodeExecutionContext
   return { ctx, setOutput, next }
 }
 
 test('定时器归入流程控制并使用流程控制配色', () => {
   expect(demoNodes.TimerEvent.category).toBe('流程控制')
-  expect(Timer.definition.title).toBe('定时器')
+  expect(Timer.definition.name).toBe('定时器')
   expect(Timer.definition.style.header.background).toBe(Delay.definition.style.header.background)
 })
 
@@ -126,7 +127,7 @@ test('定时器接入执行链后反复执行下游，停止运行后不再触�
     [link('start', 'start', 'timer'), link('timer', 'exec', 'print'), link('timer', 'time', 'print', 'message')]
   )
 
-  const running = instance.process()
+  const running = instance.start()
   await vi.advanceTimersByTimeAsync(500)
   expect(log).not.toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(500)

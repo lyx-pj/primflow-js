@@ -1,21 +1,25 @@
-import type { DebugPanelData, DebugRecord, Graph } from '@lyx-pj/primflow-canvas'
-import type { BreakpointHit, Engine, NodeExecutionData, TaskSnapshot } from '@lyx-pj/primflow-engine'
+import type { DebugPanelData, DebugRecord, Graph, NodeExecutionData } from '@lyx-pj/primflow-canvas'
+import type { Engine, NodeAttempt, TaskSnapshot } from '@lyx-pj/primflow-engine'
 import type { JsonGraph, NodeClassType, NodeExecutionStatus, NodeInstanceType } from '@lyx-pj/primflow-model'
-import {
-  appendDebugLog,
-  getTaskTrace,
-  resetDebugTrace,
-  setActiveDebugTask,
-  traceNodeExecution,
-} from './debug'
+import { resetBusinessLogs, taskLogEntries } from './debug'
 import { findEventNodes, formatOriginTitle, pickListenerNode, type TaskOrigin } from './records'
 import { buildNodeExecutionInfo, type NodeExecutionInfo } from './scopes'
 import type { ViewMeta } from './storage'
-import { quoteName, t, toolbarLabels } from './i18n'
+import { t, toolbarLabels } from './i18n'
 
 function collectNodeIds(json: JsonGraph) {
   const graphs = [json, ...Object.values(json.subgraphs)]
   return graphs.flatMap((graph) => graph.nodes.map((node) => node.id))
+}
+
+function withAttempt(data: NodeExecutionData | undefined, attempt: NodeAttempt | undefined): NodeExecutionData | undefined {
+  if (!attempt) return data
+  const { number, maxRetries, remainingRetries, failure, previousFailure } = attempt
+  return {
+    inputs: data?.inputs ?? attempt.inputs ?? {},
+    outputs: data?.outputs ?? attempt.outputs ?? {},
+    attempt: { number, maxRetries, remainingRetries, failure, previousFailure },
+  }
 }
 
 export type WorkflowEventsOptions = {
@@ -39,15 +43,16 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
   const nodeTitle = (nodeId?: string) =>
     nodeId ? (graph.findNodeAnywhere(nodeId)?.title ?? nodeId) : t('record.node')
   let selectedTaskId: string | null = null
-  let lastEngineStatus = engine.status
+  const liveAttempts = new Map<string, NodeAttempt>()
+  for (const attempt of (engine.latestTaskId && engine.getTask(engine.latestTaskId)?.attempts) || []) {
+    liveAttempts.set(attempt.nodeId, attempt)
+  }
   /** Subgraph files are read asynchronously; prevent repeated Run clicks while loading. */
   let runPending = false
-  /** Tasks created by the current session (Stop not clicked); they do not enter records until stopped, so live runs are not history. */
-  const sessionTaskIds = new Set<string>()
   /**
-   * Per-task node display info (title, subgraph scope, role).
+   * Per-task node display info (title and subgraph scope).
    *
-   * Subgraphs may come from standalone files and cannot be found in the canvas, so resolve them from the task graph;
+   * Subgraphs may come from standalone files and cannot be found on the canvas, so resolve them from the task graph;
    * the task graph is immutable during the task, so caching by task id is enough.
    */
   const taskInfos = new Map<string, Map<string, NodeExecutionInfo>>()
@@ -102,16 +107,10 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
   const defaultTitle = (nodeType?: string) => {
     if (!nodeType) return undefined
     try {
-      return graph.nodeRegistry.getNodeClass(nodeType)?.definition.title
+      return graph.nodeRegistry.getDefinition(nodeType).name
     } catch {
       return undefined
     }
-  }
-
-  /** Owning subgraph; main-graph nodes have no scope. */
-  const scopeOf = (taskId: string | undefined, nodeId: string | undefined) => {
-    if (!taskId || !nodeId) return undefined
-    return taskInfo(taskId).get(nodeId)?.scope
   }
 
   /** A source node is an event listener: it has no execution entry and is started by subscriptions. */
@@ -165,15 +164,20 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
     return formatOriginTitle(origin)
   }
 
+  /** A task is still executing while it runs, waits, pauses, or waits for external input. */
+  const isActiveStatus = (status: TaskSnapshot['status']) =>
+    status === 'running' || status === 'waiting' || status === 'paused' || status === 'interrupted'
+
+  const hasActiveTask = () => engine.getTasks().some((task) => isActiveStatus(task.status))
+
   // The debug panel reads data for the selected task on each render; selecting a record switches the canvas graph below.
   const debugData = (): DebugPanelData => {
-    const trace = getTaskTrace(selectedTaskId ?? engine.latestTaskId)
-    const hasActiveTask = engine.getTasks().some((task) =>
-      task.status === 'running' || task.status === 'waiting' || task.status === 'paused'
-    )
+    const taskId = selectedTaskId ?? engine.latestTaskId
+    // A live task has no final snapshot yet, so records cannot be replayed while one is running.
+    const canReplay = !hasActiveTask()
     return {
+      // Tasks are listed with their live status, so the running task shows as Running until it finishes.
       records: engine.getTasks()
-        .filter((task) => !sessionTaskIds.has(task.id))
         .slice()
         .reverse()
         .map((task): DebugRecord => ({
@@ -183,10 +187,15 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
           startedAt: task.startedAt,
           endedAt: task.endedAt,
           detail: task.errors[0]?.message,
-          selectable: !hasActiveTask,
+          selectable: canReplay,
         })),
-      logs: trace.logs,
-      chain: trace.chain,
+      // Logs come from the engine execution log of the selected task, merged with business log lines.
+      logs: taskLogEntries(
+        taskId ? engine.getTask(taskId) : undefined,
+        taskId ? engine.getTaskTrace(taskId) : undefined,
+        taskId ? taskInfo(taskId) : new Map<string, NodeExecutionInfo>(),
+        (nodeId, info) => titleOf(taskId ?? undefined, nodeId) || info?.title || nodeId,
+      ),
     }
   }
 
@@ -194,40 +203,12 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
 
   const exitReplay = () => {
     selectedTaskId = null
-    setActiveDebugTask(engine.latestTaskId ?? null)
     if (graph.isReplayMode()) graph.exitReplay()
     graph.setOptions({ debugPanel: { activeRecordId: null } })
     graph.refreshDebugPanel()
   }
 
-  const syncDebugStatus = () => {
-    const status = engine.status
-    if (status === lastEngineStatus) return
-    if (status === 'running') {
-      // After live execution starts, return to the editing graph so live node states do not write into the replay snapshot.
-      if (graph.isReplayMode()) exitReplay()
-      if (lastEngineStatus === 'paused') {
-        appendDebugLog(t('log.resumed'), { taskId: engine.latestTaskId ?? undefined })
-      }
-    } else if (status === 'paused') {
-      const paused = engine.pausedNode
-      const taskId = engine.latestTaskId ?? undefined
-      appendDebugLog(t('log.pausedAt', { node: quoteName(titleOf(taskId, paused?.nodeId ?? '')) }), {
-        taskId,
-        level: 'warn',
-        nodeId: paused?.nodeId,
-        scope: scopeOf(taskId, paused?.nodeId),
-      })
-    } else if (status === 'stopped') {
-      appendDebugLog(t('log.stopped'), { taskId: engine.latestTaskId ?? undefined, level: 'warn' })
-      // Only after Stop does the current session's task become reviewable history.
-      sessionTaskIds.clear()
-    }
-    lastEngineStatus = status
-  }
-
   const refreshToolbar = () => {
-    syncDebugStatus()
     const pausedNode = engine.pausedNode
     graph.setExecutionStatus(
       engine.status === 'running' || engine.status === 'paused' ? engine.status : 'idle',
@@ -235,19 +216,20 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
     )
     // A breakpoint hit does not change pending again, so sync prepared inputs in the pause notification.
     if (pausedNode) {
-      graph.setNodeExecutionStatus(pausedNode.nodeId, engine.getNodeStatus(pausedNode.nodeId),
-        engine.getNodeExecutionData(pausedNode.nodeId))
+      handleNodeStatus(pausedNode.nodeId, engine.getNodeStatus(pausedNode.nodeId))
     }
     const active = engine.status === 'running' || engine.status === 'paused'
     const labels = toolbarLabels()
-    graph.setOptions({ toolbar: {
-      actions: [
-        { id: 'run', label: labels.run, iconClass: 'ri-play-line', disabled: active },
-        { id: 'debug', label: labels.debug, iconClass: 'ri-bug-line', disabled: active },
-        { id: 'resume', label: labels.resume, iconClass: 'ri-play-circle-line', disabled: engine.status !== 'paused' },
-        { id: 'stop', label: labels.stop, iconClass: 'ri-stop-line', disabled: !active },
-      ],
-    } })
+    graph.setOptions({
+      toolbar: {
+        actions: [
+          { id: 'run', label: labels.run, iconClass: 'ri-play-line', disabled: active },
+          { id: 'debug', label: labels.debug, iconClass: 'ri-bug-line', disabled: active },
+          { id: 'resume', label: labels.resume, iconClass: 'ri-play-circle-line', disabled: engine.status !== 'paused' },
+          { id: 'stop', label: labels.stop, iconClass: 'ri-stop-line', disabled: !active },
+        ],
+      }
+    })
     refreshDebugPanel()
   }
 
@@ -259,8 +241,9 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
       try {
         // Subgraphs are standalone files, read and expanded by reference before execution; loop bodies come with the current file.
         const json = events.loadExecutionGraph ? await events.loadExecutionGraph() : graph.toJSON()
-        engine.fromJSON(json)
-        await engine.process({ debug: id === 'debug' })
+        engine.loadGraph(json)
+        graph.resetNodeExecutionStatuses()
+        await engine.start({ debug: id === 'debug' })
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error)
         events.onRunError?.(t('error.run', { reason: message }))
@@ -270,7 +253,15 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
       return
     }
     if (id === 'resume') engine.resume()
-    if (id === 'stop') engine.stop()
+    if (id === 'stop') {
+      const taskId = engine.latestTaskId
+      engine.stop()
+      if (taskId && engine.getTask(taskId)?.status === 'cancelled') {
+        for (const [nodeId, status] of engine.getNodeStatuses(taskId)) {
+          if (status === 'cancelled') graph.setNodeExecutionStatus(nodeId, status)
+        }
+      }
+    }
   }
 
   const handleRecordSelect = (record: DebugRecord | null) => {
@@ -278,12 +269,8 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
       exitReplay()
       return
     }
-    if (record.status === 'running' || record.status === 'paused') return
     // Do not switch the canvas while a task is still running, avoiding live state written into a historical snapshot.
-    const hasActiveTask = engine.getTasks().some((task) =>
-      task.status === 'running' || task.status === 'waiting' || task.status === 'paused'
-    )
-    if (hasActiveTask) return
+    if (hasActiveTask()) return
     const taskGraph = engine.getTaskGraph(record.id)
     if (!taskGraph) return
     const nodeStatuses: Record<string, NodeExecutionStatus> = {}
@@ -291,8 +278,9 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
       nodeStatuses[nodeId] = status
     })
     const nodeData: Record<string, NodeExecutionData> = {}
+    const attempts = new Map(engine.getTask(record.id)?.attempts?.map((attempt) => [attempt.nodeId, attempt]))
     for (const nodeId of collectNodeIds(taskGraph)) {
-      const data = engine.getNodeExecutionData(nodeId, record.id)
+      const data = withAttempt(engine.getNodeExecutionData(nodeId, record.id), attempts.get(nodeId))
       if (data) nodeData[nodeId] = data
     }
     selectedTaskId = record.id
@@ -304,74 +292,37 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
   const handleReplayChanged = (replaying: boolean) => {
     if (replaying || selectedTaskId === null) return
     selectedTaskId = null
-    setActiveDebugTask(engine.latestTaskId ?? null)
     graph.setOptions({ debugPanel: { activeRecordId: null } })
     graph.refreshDebugPanel()
   }
 
   const handleTaskCreated = (task: TaskSnapshot) => {
-    sessionTaskIds.add(task.id)
-    setActiveDebugTask(task.id)
+    if (task.id === engine.latestTaskId) {
+      liveAttempts.clear()
+    }
     // Capture the source here: switching views later will not rewrite this record's title.
     taskOrigins.set(task.id, describeOrigin(task))
     pruneCache(taskOrigins, task.id)
-    appendDebugLog(t('log.started'), { taskId: task.id })
     refreshDebugPanel()
   }
 
-  const handleTaskChanged = (task: TaskSnapshot) => {
-    setActiveDebugTask(task.id)
-    if (task.status === 'completed') {
-      appendDebugLog(t('log.taskCompleted'), { taskId: task.id, level: 'success' })
-    } else if (task.status === 'failed') {
-      appendDebugLog(t('log.taskFailed'), { taskId: task.id, level: 'error' })
-    } else if (task.status === 'cancelled') {
-      appendDebugLog(t('log.taskCancelled'), { taskId: task.id, level: 'warn' })
-    }
+  const handleTaskChanged = () => {
     refreshDebugPanel()
   }
 
-  const handleTaskNodeStatus = (taskId: string, nodeId: string, status: NodeExecutionStatus) => {
-    setActiveDebugTask(taskId)
-    const info = taskInfo(taskId).get(nodeId)
-    const title = titleOf(taskId, nodeId)
-    // Subgraph nodes carry scope, so the panel can indent and distinguish entry and exit.
-    traceNodeExecution(taskId, nodeId, status, title, info?.scope, info?.kind)
-    if (status === 'running') {
-      appendDebugLog(t('log.nodeStarted', { node: quoteName(title) }), { taskId, nodeId, scope: info?.scope })
-    } else if (status === 'completed') {
-      appendDebugLog(t('log.nodeCompleted', { node: quoteName(title) }), {
-        taskId,
-        nodeId,
-        level: 'success',
-        scope: info?.scope,
-      })
-    }
+  const handleTaskNodeStatus = () => {
     refreshDebugPanel()
   }
 
   const handleNodeStatus = (nodeId: string, status: NodeExecutionStatus) => {
-    graph.setNodeExecutionStatus(nodeId, status, engine.getNodeExecutionData(nodeId))
+    graph.setNodeExecutionStatus(nodeId, status, withAttempt(engine.getNodeExecutionData(nodeId), liveAttempts.get(nodeId)))
   }
 
-  const handleTaskError = (taskId: string, error: unknown, nodeId: string) => {
-    const message = error instanceof Error ? error.message : String(error)
-    appendDebugLog(t('log.nodeFailed', { node: quoteName(titleOf(taskId, nodeId)), message }), {
-      taskId,
-      nodeId,
-      level: 'error',
-      scope: scopeOf(taskId, nodeId),
-    })
-    refreshDebugPanel()
-  }
-
-  const handleBreakpoint = (taskId: string, breakpoint: BreakpointHit) => {
-    appendDebugLog(t('log.breakpoint', { node: quoteName(titleOf(taskId, breakpoint.nodeId)) }), {
-      taskId,
-      nodeId: breakpoint.nodeId,
-      level: 'warn',
-      scope: scopeOf(taskId, breakpoint.nodeId),
-    })
+  const handleAttempt = (taskId: string, attempt: NodeAttempt) => {
+    if (taskId === engine.latestTaskId && attempt.id >= (liveAttempts.get(attempt.nodeId)?.id ?? 0)) {
+      liveAttempts.set(attempt.nodeId, attempt)
+      if (!graph.isReplayMode()) handleNodeStatus(attempt.nodeId, engine.getNodeStatus(attempt.nodeId))
+    }
     refreshDebugPanel()
   }
 
@@ -379,12 +330,14 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
     if (property === 'breakpoint') engine.setBreakpoint(node.id, node.breakpoint)
   }
 
-  graph.setOptions({ debugPanel: {
-    width: 340,
-    data: debugData,
-    activeRecordId: null,
-    onRecordSelect: handleRecordSelect,
-  } })
+  graph.setOptions({
+    debugPanel: {
+      width: 340,
+      data: debugData,
+      activeRecordId: null,
+      onRecordSelect: handleRecordSelect,
+    }
+  })
   graph.resetNodeExecutionStatuses()
   engine.getNodeStatuses().forEach((status, nodeId) => handleNodeStatus(nodeId, status))
   refreshToolbar()
@@ -393,8 +346,7 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
   engine.on('task:created', handleTaskCreated)
   engine.on('task:changed', handleTaskChanged)
   engine.on('task:node:status:changed', handleTaskNodeStatus)
-  engine.on('task:error', handleTaskError)
-  engine.on('task:breakpoint:hit', handleBreakpoint)
+  engine.on('task:node:attempt', handleAttempt)
   graph.on('replay:changed', handleReplayChanged)
   graph.on('toolbar:action', handleToolbarAction)
   graph.on('node:changed', handleNodeChanged)
@@ -405,14 +357,13 @@ export function bindWorkflowEvents<NodeDefs extends Record<string, NodeClassType
     engine.off('task:created', handleTaskCreated)
     engine.off('task:changed', handleTaskChanged)
     engine.off('task:node:status:changed', handleTaskNodeStatus)
-    engine.off('task:error', handleTaskError)
-    engine.off('task:breakpoint:hit', handleBreakpoint)
+    engine.off('task:node:attempt', handleAttempt)
     graph.off('replay:changed', handleReplayChanged)
     graph.off('toolbar:action', handleToolbarAction)
     graph.off('node:changed', handleNodeChanged)
     if (graph.isReplayMode()) graph.exitReplay()
     graph.setOptions({ debugPanel: false })
-    resetDebugTrace()
+    resetBusinessLogs()
     taskInfos.clear()
     taskGraphs.clear()
     taskOrigins.clear()

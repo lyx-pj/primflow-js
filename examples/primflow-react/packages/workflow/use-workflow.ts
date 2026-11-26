@@ -324,7 +324,7 @@ export function useWorkflow() {
   const createFile = useCallback(
     async (name: string, type: ViewType) => {
       const trimmed = name.trim()
-      if (!trimmed) return
+      if (!trimmed || switchingRef.current) return
       switchingRef.current = true
       try {
         // Do not persist a file that failed to restore, or the current canvas would overwrite its unrestored record.
@@ -337,11 +337,11 @@ export function useWorkflow() {
           }
         }
         cancelPendingSave()
+        const id = createViewId()
+        const meta: ViewMeta = { id, name: trimmed, type, updatedAt: Date.now() }
         graph.clear()
         resetViewport(graph)
         if (type === 'subgraph') addSubgraphEndNode(graph)
-        const id = createViewId()
-        const meta: ViewMeta = { id, name: trimmed, type, updatedAt: Date.now() }
         await saveView({ ...meta, data: serializeRecord(graph, meta) })
         navigationRef.current = []
         currentViewRef.current = meta

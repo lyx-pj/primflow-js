@@ -1,7 +1,13 @@
-import type { DebugChainKind, DebugScope } from '@lyx-pj/primflow-canvas'
-import type { JsonGraph, JsonNode } from '@lyx-pj/primflow-model'
+import type { DebugScope } from '@lyx-pj/primflow-canvas'
+import { getJsonNodeDefinitionId, type JsonGraph, type JsonNode } from '@lyx-pj/primflow-model'
 
-/** Node display info in the execution chain. */
+/**
+ * Node display info in the execution log.
+ *
+ * Titles and scopes come from the graph the task actually ran: subgraph files
+ * are standalone and cannot be found on the canvas, so the task graph is the
+ * only source for their names.
+ */
 export type NodeExecutionInfo = {
   /** Stored node title; empty without a custom title, and the caller falls back to the default title. */
   title?: string
@@ -9,24 +15,10 @@ export type NodeExecutionInfo = {
   nodeType: string
   /** Owning subgraph; empty for main-graph nodes. */
   scope?: DebugScope
-  /** Node role: subgraph call, subgraph entry, subgraph exit, or ordinary node. */
-  kind: DebugChainKind
 }
 
 /**
- * Determine a node's role in the execution chain.
- *
- * Subgraph entry and exit are kept distinct from the main graph's start node: only a start inside a subgraph is an entry.
- */
-function kindOf(node: JsonNode, inSubgraph: boolean): DebugChainKind {
-  if (node.type === 'subgraph') return 'subgraph'
-  if (node.type === 'end') return 'subgraph-end'
-  if (node.type === 'start') return inSubgraph ? 'subgraph-start' : 'node'
-  return 'node'
-}
-
-/**
- * Resolve each node's title, subgraph scope, and role from the task graph.
+ * Resolve each node's title and subgraph scope from the task graph.
  *
  * An execution graph consists of the main graph and subgraph regions: nodes in a region belong to that subgraph,
  * while the call node stays in the parent region and uses the subgraph name as its title.
@@ -39,16 +31,16 @@ export function buildNodeExecutionInfo(json: JsonGraph): Map<string, NodeExecuti
     for (const node of nodes) {
       infos.set(node.id, {
         title: node.title,
-        nodeType: node.nodeType,
+        nodeType: getJsonNodeDefinitionId(node),
         scope: parentScope,
-        kind: kindOf(node, Boolean(parentScope)),
       })
-      if (node.type !== 'subgraph' || !node.subgraphId) continue
-      const region = regions[node.subgraphId]
+      const targetGraphId = node.targetGraphId
+      if (node.kind !== 'subgraph' || !targetGraphId) continue
+      const region = regions[targetGraphId]
       if (!region) continue
       visit(region.nodes, {
-        subgraphId: node.subgraphId,
-        title: node.title || node.subgraphId,
+        subgraphId: targetGraphId,
+        title: node.title || targetGraphId,
         depth: (parentScope?.depth ?? 0) + 1,
       })
     }

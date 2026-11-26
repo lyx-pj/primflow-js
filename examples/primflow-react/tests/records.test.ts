@@ -7,7 +7,7 @@ import { setLanguage } from '../packages/workflow/i18n'
 import { findEventNodes, formatOriginTitle, pickListenerNode } from '../packages/workflow/records'
 import { createRegistry } from '../packages/workflow/nodes'
 import type { ViewMeta } from '../packages/workflow/storage'
-import { createEngine, link, node } from './helpers'
+import { createEngine, link, node, type DemoEngine } from './helpers'
 
 type DemoDefs = ReturnType<typeof createRegistry>['registry']
 
@@ -65,24 +65,21 @@ test('同名节点里优先选 source 型的监听节点', () => {
 })
 
 /**
- * Run the real engine once and pull the debug panel records.
+ * Bind the example events to a real engine and expose the debug panel data.
  *
  * Use a minimal canvas stub: panel data arrives through setOptions, and the test only needs to retain it.
  */
-async function runRecords(view: ViewMeta) {
+function bindPanel(engine: DemoEngine, view: ViewMeta) {
   const registry = createRegistry()
-  const engine = createEngine(
-    [node('start'), node('EventTrigger', 'trigger'), node('EventListener', 'listener')],
-    [link('start', 'start', 'trigger')],
-  )
   let panel: { data?: () => DebugPanelData } | undefined
   const graph = {
-    nodeRegistry: { getNodeClass: (type: string) => registry.getNodeClass(type) },
+    nodeRegistry: registry,
     findNodeAnywhere: () => undefined,
     setOptions: (options: Record<string, unknown>) => {
       if (options.debugPanel && typeof options.debugPanel === 'object') panel = options.debugPanel
     },
     refreshDebugPanel: () => {},
+    clearNodeProgress: () => {},
     isReplayMode: () => false,
     exitReplay: () => {},
     enterReplay: () => {},
@@ -96,14 +93,25 @@ async function runRecords(view: ViewMeta) {
   const dispose = bindWorkflowEvents(graph as unknown as Graph<DemoDefs>, engine, {
     getCurrentView: () => view,
   })
-  await engine.process()
+  return { dispose, records: () => panel?.data?.().records ?? [] }
+}
+
+/**
+ * Run the real engine once and pull the debug panel records.
+ */
+async function runRecords(view: ViewMeta) {
+  const engine = createEngine(
+    [node('start'), node('EventTrigger', 'trigger'), node('EventListener', 'listener')],
+    [link('start', 'start', 'trigger')],
+  )
+  const { dispose, records } = bindPanel(engine, view)
+  await engine.start()
   // Event emission starts another task; wait for it to be created before reading records.
   await vi.waitFor(() => expect(engine.getTasks().length).toBe(2))
-  // Only after Stop does the current session's task enter history.
   engine.stop()
-  const records = panel?.data?.().records ?? []
+  const list = records()
   dispose()
-  return records
+  return list
 }
 
 test('英文浏览器语言下执行记录使用英文标题', () => {
@@ -133,4 +141,49 @@ test('执行记录按发起它的视图命名：普通视图、子图文件、�
     '执行事件【事件监听】【demo:message】',
     '执行【子图】【订单子图】',
   ])
+})
+
+test('执行中的任务出现在执行记录里，状态为运行中且不可回溯', async () => {
+  const view: ViewMeta = { id: 'view-1', name: '订单流程', type: 'view', updatedAt: 0 }
+  // The delay node keeps the task running while the records are read.
+  const engine = createEngine(
+    [node('start'), node('Delay', 'delay', { duration: 5000 })],
+    [link('start', 'start', 'delay')],
+  )
+  const { dispose, records } = bindPanel(engine, view)
+  void engine.start()
+  await vi.waitFor(() => expect(engine.getTasks().length).toBe(1))
+
+  const running = records()
+  expect(running).toHaveLength(1)
+  expect(running[0]).toMatchObject({
+    title: '执行【订单流程】',
+    status: 'running',
+    selectable: false,
+  })
+  // A running task has no final snapshot yet, so it offers no duration.
+  expect(running[0].endedAt).toBeUndefined()
+
+  dispose()
+})
+
+test('任务结束后仍在执行记录里，状态更新为已完成并可回溯', async () => {
+  const view: ViewMeta = { id: 'view-1', name: '订单流程', type: 'view', updatedAt: 0 }
+  const engine = createEngine(
+    [node('start'), node('Delay', 'delay', { duration: 10 })],
+    [link('start', 'start', 'delay')],
+  )
+  const { dispose, records } = bindPanel(engine, view)
+  await engine.start()
+  await vi.waitFor(() => expect(engine.getTasks()[0]?.status).toBe('completed'))
+
+  const finished = records()
+  expect(finished).toHaveLength(1)
+  expect(finished[0]).toMatchObject({
+    title: '执行【订单流程】',
+    status: 'completed',
+    selectable: true,
+  })
+
+  dispose()
 })

@@ -1,4 +1,4 @@
-import type { JsonGraph, JsonNode } from '@lyx-pj/primflow-model'
+import { getJsonNodeDefinitionId, type JsonGraph, type JsonNode } from '@lyx-pj/primflow-model'
 import type { ViewType } from './storage'
 import { getLanguage, translate, type AppLanguage } from './i18n'
 
@@ -41,7 +41,7 @@ export function formatOriginTitle(origin: TaskOrigin, language: AppLanguage = ge
  */
 export function findEventNodes(json: JsonGraph, eventName: string): JsonNode[] {
   const graphs = [json, ...Object.values(json.subgraphs ?? {})]
-  return graphs.flatMap((graph) => graph.nodes).filter((node) => node.values?.event === eventName)
+  return graphs.flatMap((graph) => graph.nodes).filter((node) => node.inputValues.event === eventName)
 }
 
 /**
@@ -54,5 +54,5 @@ export function pickListenerNode(
   nodes: JsonNode[],
   isSource: (nodeType: string) => boolean,
 ): JsonNode | undefined {
-  return nodes.find((node) => isSource(node.nodeType)) ?? nodes[0]
+  return nodes.find((node) => isSource(getJsonNodeDefinitionId(node))) ?? nodes[0]
 }
