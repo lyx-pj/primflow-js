@@ -1,4 +1,8 @@
 import type { JsonGraph } from '@lyx-pj/primflow-model'
+import type {
+  CachedSubgraphPreview,
+  SubgraphPreviewCacheAdapter,
+} from '@lyx-pj/primflow-canvas'
 import { getLanguage, translate } from './i18n'
 
 /** File types: an ordinary view is an execution entry, while a subgraph is an independent flow callable by other files. */
@@ -22,8 +26,10 @@ export type ViewMeta = {
 }
 
 const DB_NAME = 'bpgraph'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const VIEW_STORE = 'views'
+/** Rendered subgraph card previews, keyed by target graph id. */
+const PREVIEW_STORE = 'previews'
 /** Old versions had one fixed archive store; migrate it to the first view on upgrade. */
 const LEGACY_STORE = 'graphs'
 const LEGACY_VIEW_ID = 'view-legacy'
@@ -35,6 +41,9 @@ function openDB(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const db = request.result
       const tx = request.transaction
+      if (!db.objectStoreNames.contains(PREVIEW_STORE)) {
+        db.createObjectStore(PREVIEW_STORE, { keyPath: 'targetId' })
+      }
       if (db.objectStoreNames.contains(VIEW_STORE)) return
       db.createObjectStore(VIEW_STORE, { keyPath: 'id' })
       // Old versions stored the whole workflow under a fixed key; move it into the view store on upgrade to avoid data loss.
@@ -85,6 +94,29 @@ export async function listViews(): Promise<ViewMeta[]> {
   })
 }
 
+/**
+ * Read every standalone subgraph file as a canvas preview source.
+ *
+ * Canvas never reads storage; the application pushes this map once at boot and
+ * refreshes individual entries when a subgraph file is saved or deleted.
+ */
+export async function loadSubgraphSources(): Promise<Record<string, JsonGraph>> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(VIEW_STORE, 'readonly')
+    const request = tx.objectStore(VIEW_STORE).getAll()
+    request.onsuccess = () => {
+      const sources: Record<string, JsonGraph> = {}
+      for (const view of request.result as ViewRecord[]) {
+        if (!view || view.type !== 'subgraph' || !view.data || typeof view.id !== 'string') continue
+        sources[view.id] = view.data
+      }
+      resolve(sources)
+    }
+    request.onerror = () => reject(request.error)
+  })
+}
+
 /** Read one view's workflow data; return null when the view does not exist. */
 export async function loadView(id: string): Promise<JsonGraph | null> {
   const db = await openDB()
@@ -94,6 +126,66 @@ export async function loadView(id: string): Promise<JsonGraph | null> {
     request.onsuccess = () => resolve(request.result?.data ?? null)
     request.onerror = () => reject(request.error)
   })
+}
+
+/** One persisted preview row; the canvas-owned payload stays opaque to this module. */
+type PreviewRecord = {
+  targetId: string
+  preview: CachedSubgraphPreview
+}
+
+/** Load persisted card previews; a cache failure must not block startup. */
+async function loadCachedPreviews(): Promise<Record<string, CachedSubgraphPreview>> {
+  const db = await openDB()
+  return new Promise((resolve) => {
+    const tx = db.transaction(PREVIEW_STORE, 'readonly')
+    const request = tx.objectStore(PREVIEW_STORE).getAll()
+    request.onsuccess = () => {
+      const entries: Record<string, CachedSubgraphPreview> = {}
+      for (const row of request.result as PreviewRecord[]) {
+        if (row && typeof row.targetId === 'string' && row.preview) entries[row.targetId] = row.preview
+      }
+      resolve(entries)
+    }
+    request.onerror = () => resolve({})
+  })
+}
+
+/** Persist one rendered preview; failures are ignored because the canvas can render again. */
+async function saveCachedPreview(targetId: string, preview: CachedSubgraphPreview): Promise<void> {
+  const db = await openDB()
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(PREVIEW_STORE, 'readwrite')
+    tx.objectStore(PREVIEW_STORE).put({ targetId, preview } satisfies PreviewRecord)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => resolve()
+    tx.onabort = () => resolve()
+  })
+}
+
+/** Drop one file's cached preview. */
+async function removeCachedPreview(targetId: string): Promise<void> {
+  const db = await openDB()
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(PREVIEW_STORE, 'readwrite')
+    tx.objectStore(PREVIEW_STORE).delete(targetId)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => resolve()
+    tx.onabort = () => resolve()
+  })
+}
+
+/** Application-owned persistence for subgraph card previews. */
+export function createPreviewCacheAdapter(): SubgraphPreviewCacheAdapter {
+  return {
+    load: loadCachedPreviews,
+    save(targetId, preview) {
+      return saveCachedPreview(targetId, preview).catch(() => {})
+    },
+    remove(targetId) {
+      return removeCachedPreview(targetId).catch(() => {})
+    },
+  }
 }
 
 /** Write (or overwrite) a view. */
@@ -139,12 +231,13 @@ export async function renameView(id: string, name: string): Promise<void> {
   })
 }
 
-/** Delete a view. */
+/** Delete a view and its cached card preview. */
 export async function deleteView(id: string): Promise<void> {
   const db = await openDB()
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(VIEW_STORE, 'readwrite')
+    const tx = db.transaction([VIEW_STORE, PREVIEW_STORE], 'readwrite')
     tx.objectStore(VIEW_STORE).delete(id)
+    tx.objectStore(PREVIEW_STORE).delete(id)
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
     tx.onabort = () => reject(tx.error)

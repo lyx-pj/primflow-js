@@ -2,7 +2,15 @@
 import './language'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { JsonGraph } from '@lyx-pj/primflow-model'
-import { deleteView, listViews, loadView, renameView, saveView } from '../packages/workflow/storage'
+import type { CachedSubgraphPreview } from '@lyx-pj/primflow-canvas'
+import {
+  createPreviewCacheAdapter,
+  deleteView,
+  listViews,
+  loadView,
+  renameView,
+  saveView,
+} from '../packages/workflow/storage'
 import { createFakeIndexedDB, type FakeIndexedDB } from './fake-indexeddb'
 
 const emptyGraph = (): JsonGraph => ({
@@ -113,4 +121,25 @@ test('旧版本的单存档升级后迁移成第一个视图', async () => {
   expect(await loadView(views[0].id)).toEqual(data)
   // Delete the old store after migration so two copies are not left behind.
   expect(fake.databases.get('bpgraph')?.objectStoreNames.contains('graphs')).toBe(false)
+})
+
+test('预览缓存可以读写，并在删除文件时一并清理', async () => {
+  const adapter = createPreviewCacheAdapter()
+  const preview: CachedSubgraphPreview = {
+    version: 1,
+    key: 'content-key',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    omittedNodes: 0,
+    omittedLinks: 0,
+  }
+
+  await adapter.save('sub', preview)
+  expect((await adapter.load()).sub).toEqual(preview)
+
+  await adapter.remove('sub')
+  expect((await adapter.load()).sub).toBeUndefined()
+
+  await adapter.save('sub', preview)
+  await deleteView('sub')
+  expect((await adapter.load()).sub).toBeUndefined()
 })

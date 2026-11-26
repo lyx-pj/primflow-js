@@ -14,10 +14,16 @@ function toMeta(view: ViewRecord): ViewMeta {
 
 /** In-memory storage for testing view orchestration without IndexedDB. */
 export const fakeStorage = {
+  createPreviewCacheAdapter: vi.fn(() => ({
+    load: vi.fn(async () => ({})),
+    save: vi.fn(),
+    remove: vi.fn(),
+  })),
   listViews: vi.fn(async (): Promise<ViewMeta[]> =>
     [...records.values()].map(toMeta).sort((a, b) => b.updatedAt - a.updatedAt),
   ),
   loadView: vi.fn(async (id: string) => records.get(id)?.data ?? null),
+  loadSubgraphSources: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
   saveView: vi.fn(async (view: ViewRecord) => {
     records.set(view.id, view)
   }),
@@ -40,8 +46,10 @@ export function seedView(view: ViewRecord) {
 /** Clear records before each case so tests do not affect each other. */
 export function resetFakeStorage() {
   records.clear()
+  fakeStorage.createPreviewCacheAdapter.mockClear()
   fakeStorage.listViews.mockClear()
   fakeStorage.loadView.mockClear()
+  fakeStorage.loadSubgraphSources.mockClear()
   fakeStorage.saveView.mockClear()
   fakeStorage.renameView.mockClear()
   fakeStorage.deleteView.mockClear()

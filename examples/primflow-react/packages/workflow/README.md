@@ -18,7 +18,7 @@ This application integration module belongs to `primflow-react-example` and is i
 | [executors/index.ts](executors/index.ts) | Executor implementations outside the node package | `executors.test.ts` |
 | [executors/http.ts](executors/http.ts), [services/http.ts](services/http.ts) | HTTP node executor and browser Fetch service registered through `defineService` | `http.test.ts` |
 | [use-workflow.ts](use-workflow.ts) | File management, restoration, autosave, and React lifecycle | `autosave.test.ts`, `restore.test.ts`, `subgraphs.test.ts` |
-| [storage.ts](storage.ts) | IndexedDB CRUD for files and metadata | `storage.test.ts` |
+| [storage.ts](storage.ts) | IndexedDB CRUD for files, metadata, and rendered subgraph previews | `storage.test.ts` |
 | [views.ts](views.ts) | File naming, restoration validation, and standalone subgraph Start id normalization | `views.test.ts`, `restore.test.ts` |
 | [subgraphs.ts](subgraphs.ts) | Subgraph palette entries and recursive file assembly before execution | `subgraphs.test.ts` |
 | [events.ts](events.ts) | Toolbar actions, engine-to-canvas event bridge, and replay | `debug.test.ts` |

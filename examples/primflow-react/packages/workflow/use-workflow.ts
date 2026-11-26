@@ -5,8 +5,10 @@ import { useGraph } from './context/graph-context'
 import { useEngine } from './context/engine-context'
 import { bindWorkflowEvents } from './events'
 import {
+  createPreviewCacheAdapter,
   deleteView as removeStoredView,
   listViews,
+  loadSubgraphSources,
   loadView,
   renameView as renameStoredView,
   saveView,
@@ -184,13 +186,15 @@ export function useWorkflow() {
     const current = currentViewRef.current
     if (!current) return
     const updatedAt = Date.now()
+    const data = serializeRecord(graph, current)
     await saveView({
       id: current.id,
       name: current.name,
       type: current.type,
-      data: serializeRecord(graph, current),
+      data,
       updatedAt,
     })
+    if (current.type === 'subgraph') graph.updateSubgraphSource(current.id, data)
     updateViews((prev) => prev.map((view) => (view.id === current.id ? { ...view, updatedAt } : view)))
   }, [graph, updateViews])
 
@@ -204,13 +208,15 @@ export function useWorkflow() {
     setSaveStatus({ state: 'saving' })
     try {
       const updatedAt = Date.now()
+      const data = serializeRecord(graph, current)
       await saveView({
         id: current.id,
         name: current.name,
         type: current.type,
-        data: serializeRecord(graph, current),
+        data,
         updatedAt,
       })
+      if (current.type === 'subgraph') graph.updateSubgraphSource(current.id, data)
       if (!aliveRef.current || seq !== saveSeqRef.current) return
       updateViews((prev) => prev.map((view) => (view.id === current.id ? { ...view, updatedAt } : view)))
       setSaveStatus({ state: 'saved', savedAt: updatedAt })
@@ -342,7 +348,9 @@ export function useWorkflow() {
         graph.clear()
         resetViewport(graph)
         if (type === 'subgraph') addSubgraphEndNode(graph)
-        await saveView({ ...meta, data: serializeRecord(graph, meta) })
+        const data = serializeRecord(graph, meta)
+        await saveView({ ...meta, data })
+        if (type === 'subgraph') graph.updateSubgraphSource(meta.id, data)
         navigationRef.current = []
         currentViewRef.current = meta
         updateViews((prev) => [...prev, meta])
@@ -374,6 +382,7 @@ export function useWorkflow() {
       switchingRef.current = true
       try {
         await removeStoredView(id)
+        graph.updateSubgraphSource(id, null)
         navigationRef.current = navigationRef.current.filter((source) => source.viewId !== id)
         if (currentViewRef.current?.id === id) navigationRef.current = []
         if (!remaining.length) {
@@ -455,6 +464,8 @@ export function useWorkflow() {
     let cancelled = false
     const boot = async () => {
       try {
+        // Preview persistence stays application-owned; the canvas only calls this adapter.
+        graph.setSubgraphPreviewCache(createPreviewCacheAdapter())
         let list: ViewMeta[]
         try {
           list = await listViews()
@@ -467,6 +478,15 @@ export function useWorkflow() {
         }
         if (cancelled) return
         updateViews(() => list)
+        // The canvas never reads storage; supply standalone subgraph JSON for card previews once at boot.
+        try {
+          graph.setSubgraphSources(await loadSubgraphSources())
+        } catch {
+          // Preview sources are optional; a read failure must not block opening the last file.
+        }
+        // Hydrate cached cards before restoring the view so the first paint already has an image.
+        await graph.preloadSubgraphPreviews()
+        if (cancelled) return
 
         if (!list.length) {
           const id = createViewId()
