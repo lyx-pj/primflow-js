@@ -10,7 +10,7 @@ The system separates graph data, workflow execution, the canvas, and React integ
 | --- | --- |
 | model | Define nodes, ports, variables, and graph JSON without external dependencies |
 | engine | Execute graph nodes and manage events, tasks, loops, and node resources without depending on the DOM |
-| canvas | Edit and display graphs and execution results using JointJS and lit-html, without depending on engine |
+| canvas | Edit and display graphs and execution results using JointJS, lit-html, and CodeMirror, without depending on engine |
 | react | Provide Providers and `GraphView` to connect React components with the canvas and engine |
 | Application | Register business nodes, save files, and connect engine events to the UI |
 
@@ -50,20 +50,24 @@ The canvas and engine need the same node and graph data, but workflow execution 
 | Data | Ownership rules |
 | --- | --- |
 | Graph configuration | model defines the format, canvas edits it, and the application saves it; execution logs and temporary state stay separate |
+| Engine registrations | The application provides a `NodeRegistry`. Each engine holds the executors and services used by its tasks |
 | Session resources | engine manages connections, listeners, and `nodeState`; resources initialize once per session and are cleaned up on stop |
-| Task data | Each task owns its inputs, outputs, variables, and temporary `state`; cancelling one task does not affect others |
-| Iteration data | Inputs, outputs, and temporary state are recreated for each iteration; business state passes between iterations through return nodes |
+| Task data | Each task owns its inputs, outputs, application context, and temporary `taskState`; cancelling one task does not affect others |
+| Business state | Each task owns the committed JSON values exposed through `ctx.state`. Each activation reads a version and stages its own updates |
+| Iteration data | Inputs, outputs, and temporary state are recreated for each iteration. The return node passes the next entry value |
 | Canvas execution indicators | canvas displays states and data supplied by the application; it neither executes workflows nor collects logs |
 | Saved files | The application saves current edits before switching files and pauses autosave while displaying history |
 
 Event arguments and task data are copied to isolate them. Resources that cannot be copied, such as connections and functions, belong in services or `nodeState`. See the [engine README](../packages/primflow-engine/README.md) for usage.
 
+The model owns the type registry and validation rules. Graph files store type IDs and serializable values. Host services own file bytes. The engine owns live progress and stream queues for each execution, and applications forward progress to the canvas.
+
 ## Execution flow
 
 1. The user edits the canvas, and the application saves the current file after a delay.
 2. When execution starts, the application reads the canvas JSON and loads referenced standalone subgraph files.
-3. The application passes the complete graph to engine and calls `process`.
-4. engine executes nodes and emits events; the application updates canvas states, logs, and the execution chain.
+3. The application passes the complete graph to `engine.loadGraph()` for validation, then calls `engine.start()`.
+4. The engine executes nodes and records a [task execution log](../packages/primflow-engine/docs/execution-trace.md). The application subscribes to engine events for live canvas updates.
 5. History is available after stopping. Leaving replay restores the original editing graph.
 
 engine only receives prepared graphs and does not read browser files. Ordinary subgraphs use `Start` / `End` to receive parameters and return results; see [Subgraph parameters](../packages/primflow-engine/docs/subgraphs.md). Loops use `LoopEntry` / `LoopReturn`; see [Loop execution](../packages/primflow-engine/docs/loops.md). Their execution rules differ.

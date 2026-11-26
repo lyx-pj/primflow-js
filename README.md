@@ -15,6 +15,14 @@ Try the [live React example](https://lyx-pj.github.io/primflow-js/).
 | `@lyx-pj/primflow-canvas` | Edit workflows visually with English or Chinese UI | [README](packages/primflow-canvas/README.md) |
 | `@lyx-pj/primflow-react`  | Use workflows in React applications                | [README](packages/primflow-react/README.md)  |
 
+Nodes can subscribe to business events and request their own execution. The engine supports backoff retries for safe-to-rerun nodes, fallback outputs, and upstream re-execution along a traced linear input path. A retryable read from task state uses the consumer's retry policy. See the [engine documentation](packages/primflow-engine/README.md).
+
+Nodes are created and restored using their registered definition IDs. The definition name supplies the default title for each instance. Graph files store configured inputs in `inputValues` and connect output ports to input ports by ID. See the [node model](packages/primflow-model/README.md).
+
+Use `defineNode` to declare ports, `defineExecutor` to infer the execution context from a node, and `defineService` to declare engine services and their dependencies. See the [engine example](packages/primflow-engine/README.md#define-an-executor).
+
+Applications can register structured types and stream ports. The canvas, graph files, and engine share the same model type rules. The React example includes local image, PDF, and text-stream nodes. See [data types](packages/primflow-model/README.md#register-data-types) and [stream execution](packages/primflow-engine/README.md#live-progress-and-stream-ports).
+
 ## Quick start
 
 Install the packages in an existing React 18 or 19 project:
@@ -45,7 +53,7 @@ export default function App() {
 }
 ```
 
-This example mounts the editor. See the [React guide](packages/primflow-react/README.md) to register custom nodes and connect workflow execution. For execution without a UI, use [engine](packages/primflow-engine/README.md) directly.
+This example mounts the editor. See the [React guide](packages/primflow-react/README.md) to register custom nodes and connect workflow execution. For execution without a UI, construct an `Engine` with a `NodeRegistry`, call `engine.loadGraph(json)`, then `engine.start()`. See the [engine guide](packages/primflow-engine/README.md).
 
 ## Run the repository example
 
@@ -57,8 +65,21 @@ pnpm dev
 ```
 
 Open the URL printed in the terminal to try the example application.
+Double-click blank canvas space and choose **Basic input** to add data-only nodes, including JSON arrays and objects. Downstream nodes read their values on demand. Get Variable under **Variables** also reads the current task state on demand. See the [React example guide](examples/primflow-react/README.md).
+
+Dropping a new connection or a selected link's endpoint on blank canvas opens a palette limited to nodes with a compatible port. The draft connection stays visible until a node is chosen or the edit is cancelled; the added node and link are one undoable edit.
+
+A data input can connect to multiple outputs. The engine prefers a source on the current execution path. See [data source selection](packages/primflow-engine/README.md#multiple-data-sources-for-one-input).
+
+Nodes can read and update [task state](packages/primflow-engine/README.md#task-state). Each startup or event task gets its own state.
+
+Select a Loop node to set its iteration cap and timeout. Inside the body, Loop Entry exposes the initial input and the current iteration input as separate outputs. See [Editing loop bodies](packages/primflow-canvas/docs/loops.md).
 
 ## Architecture
+
+The engine keeps [structured execution logs](packages/primflow-engine/docs/execution-trace.md) with individual node results and the upstream outputs a waiting task needs.
+
+Nodes can [wait for a business response](packages/primflow-engine/README.md#business-interruptions) during execution. The canvas distinguishes failure, cancellation, skipped branches, and business interruptions with [node glows](packages/primflow-canvas/README.md).
 
 See [Architecture](docs/architecture.md) for module responsibilities, terminology, data ownership, and the execution flow.
 

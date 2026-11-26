@@ -15,6 +15,14 @@
 | `@lyx-pj/primflow-canvas` | 可视化编辑工作流，支持英中界面 | [README](packages/primflow-canvas/README.zh-CN.md) |
 | `@lyx-pj/primflow-react`  | 在 React 应用中使用工作流      | [README](packages/primflow-react/README.zh-CN.md)  |
 
+节点可以订阅业务事件并申请执行自身。引擎支持可安全重跑节点的退避重试、失败降级，以及沿线性输入来源追溯重跑。读取任务状态时出现可重试错误，会应用下游节点的重试策略。见[引擎文档](packages/primflow-engine/README.zh-CN.md)。
+
+节点通过注册时指定的稳定定义 ID 创建和恢复，定义名称用作实例的默认显示标题。图文件通过 `inputValues` 保存节点的配置输入，通过端口 ID 记录输出到输入的连线。见[节点模型](packages/primflow-model/README.zh-CN.md)。
+
+用 `defineNode` 声明节点端口，用 `defineExecutor` 从节点推断执行上下文，用 `defineService` 定义引擎服务和依赖。见[引擎接入示例](packages/primflow-engine/README.zh-CN.md#定义执行器)。
+
+应用可以注册结构类型和流端口。画布、图文件和执行器共用 model 的类型规则。React 示例提供本地图片、PDF 和文本流节点。见[类型定义](packages/primflow-model/README.zh-CN.md#注册数据类型)与[流式执行](packages/primflow-engine/README.zh-CN.md#实时进度与流端口)。
+
 ## 快速开始
 
 在已有的 React 18 或 19 项目中安装：
@@ -45,7 +53,7 @@ export default function App() {
 }
 ```
 
-此示例用于挂载编辑器。注册自定义节点和接入工作流执行见 [React 接入文档](packages/primflow-react/README.zh-CN.md)；只需执行流程时，可直接使用 [engine](packages/primflow-engine/README.zh-CN.md)。
+此示例用于挂载编辑器。注册自定义节点和接入工作流执行见 [React 接入文档](packages/primflow-react/README.zh-CN.md)；只需执行流程时，用 `NodeRegistry` 创建 `Engine`，依次调用 `engine.loadGraph(json)` 和 `engine.start()`。详见[引擎文档](packages/primflow-engine/README.zh-CN.md)。
 
 ## 运行仓库示例
 
@@ -57,8 +65,21 @@ pnpm dev
 ```
 
 启动后在浏览器打开终端显示的地址即可看到示例应用。
+双击画布空白处，选择「基础输入」可添加只有数据端口的节点，包括 JSON 数组和对象。下游节点按需读取这些值。「变量」里的获取变量也按需读取当前任务状态。详见 [React 示例文档](examples/primflow-react/README.zh-CN.md)。
+
+把新连线或已选连线的端点拖到画布空白处，会打开只包含兼容节点的面板；临时连线在选择节点或取消前保持可见，新增节点和连线是一次可撤销的编辑。
+
+一个数据输入可以连接多个输出。引擎优先读取当前执行路径上的来源。详见[数据源选择](packages/primflow-engine/README.zh-CN.md#同一个输入的多个数据源)。
+
+节点可以读写[任务业务状态](packages/primflow-engine/README.zh-CN.md#任务业务状态)。启动任务和每个事件任务各自持有独立状态。
+
+单击 Loop 节点可设置次数上限和超时。循环体中的 Loop Entry 分别提供初始输入和本轮迭代输入。详见 [循环体的编辑](packages/primflow-canvas/docs/loops.zh-CN.md)。
 
 ## 架构
+
+引擎保留[结构化执行日志](packages/primflow-engine/docs/execution-trace.zh-CN.md)，可按执行 ID 查节点结果，并定位等待中的上游输出。
+
+执行中的节点可以[等待业务答复](packages/primflow-engine/README.zh-CN.md#业务中断)。画布通过[节点光晕](packages/primflow-canvas/README.zh-CN.md)区分失败、取消、跳过和业务中断。
 
 模块分工、常用概念、数据归属和执行流程见 [架构说明](docs/architecture.zh-CN.md)。
 

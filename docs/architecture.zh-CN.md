@@ -10,7 +10,7 @@
 | --- | --- |
 | model | 定义节点、端口、变量和图的 JSON 格式，不依赖外部库 |
 | engine | 按图执行节点，管理事件、任务、循环和节点资源，不依赖 DOM |
-| canvas | 使用 JointJS 和 lit-html 编辑、显示图及执行结果，不依赖 engine |
+| canvas | 使用 JointJS、lit-html 和 CodeMirror 编辑、显示图及执行结果，不依赖 engine |
 | react | 提供 Provider 和 `GraphView`，连接 React 组件与画布、引擎 |
 | 应用 | 注册业务节点、保存文件，连接引擎事件和界面 |
 
@@ -50,20 +50,24 @@ flowchart TD
 | 数据 | 管理规则 |
 | --- | --- |
 | 图配置 | model 定义格式，canvas 编辑，应用保存；不混入执行日志或临时状态 |
+| 引擎注册信息 | 应用提供 `NodeRegistry`，各引擎持有自己的执行器和服务注册，供本引擎的任务复用 |
 | 会话资源 | engine 管理连接、监听和 `nodeState`；每次会话初始化一次，停止时清理 |
-| 任务数据 | 每个任务独立保存输入、输出、变量和临时 `state`，取消一个任务不影响其他任务 |
-| 单轮循环数据 | 每轮重新创建输入、输出和临时状态；跨轮业务状态通过返回节点传递 |
+| 任务数据 | 每个任务独立保存输入、输出、应用上下文和临时 `taskState`，取消一个任务不影响其他任务 |
+| 任务业务状态 | 每个任务独立持有 `ctx.state` 的已提交 JSON 值，每次节点执行读取一个版本并暂存自己的更新 |
+| 单轮循环数据 | 每轮重新创建输入、输出和临时状态；循环返回节点传递下一轮的入口值 |
 | 画布执行提示 | canvas 显示应用传入的状态和数据，不负责执行或收集日志 |
 | 文件存档 | 应用切换文件前先保存当前修改，查看历史记录时暂停自动保存 |
 
 事件参数和任务数据通过复制来隔离。连接、函数等不能复制的资源放在服务或 `nodeState` 中，具体用法见 [engine README](../packages/primflow-engine/README.zh-CN.md)。
 
+类型注册表和类型规则由 model 管理。图文件保存类型 ID 和可序列化的值。文件字节由宿主服务管理，实时进度和流队列由引擎按次执行管理。应用订阅进度事件并将预览交给画布。
+
 ## 一次执行的过程
 
 1. 使用者编辑画布，应用延迟保存当前文件。
 2. 点击执行时，应用读取画布 JSON，并加载其中引用的独立子图文件。
-3. 应用把完整的图传给 engine，再调用 `process`。
-4. engine 执行节点并发送事件，应用据此更新画布状态、日志和执行链。
+3. 应用通过 `engine.loadGraph()` 加载并校验完整的图，再调用 `engine.start()`。
+4. engine 执行节点并记录[任务执行日志](../packages/primflow-engine/docs/execution-trace.zh-CN.md)。应用可以订阅事件来实时更新画布状态。
 5. 停止后可以查看历史记录；退出历史回溯时恢复原来的编辑图。
 
 engine 只接收已经准备好的图，不读取浏览器文件。普通子图通过 `Start` / `End` 传入参数和返回结果，规则见 [子图参数](../packages/primflow-engine/docs/subgraphs.zh-CN.md)；循环使用 `LoopEntry` / `LoopReturn`，见 [循环执行](../packages/primflow-engine/docs/loops.zh-CN.md)。两者的执行规则不同。
