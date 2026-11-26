@@ -14,14 +14,12 @@ The engine includes the control nodes `loop`, `loop-entry`, and `loop-return`. [
 
 ## Values between iterations
 
-The loop entry's `value` is the entry value for the current iteration:
+| Loop Entry output | First iteration | Later iterations |
+| --- | --- | --- |
+| `initialValue` | `Loop.input` at invocation start | A copy of the same initial input |
+| `value` | `Loop.input` at invocation start | The preceding iteration's submitted result |
 
-| Iteration | Entry value |
-| --- | --- |
-| First | `Loop.input` |
-| Each later iteration | The `value` submitted by the previous return node |
-
-The engine passes values along without interpreting them. To traverse a collection or accumulate a count, body nodes read the previous value, compute the next value, and submit it. Intermediate state that must survive between iterations belongs in the submitted value.
+Connect `value` to accumulate results or traverse a collection. Connect `initialValue` to rerun a generator with the same input after a validation failure. The body can use both outputs in one iteration.
 
 ## Per-iteration isolation
 
@@ -29,12 +27,15 @@ A startup or event creates a task (`taskId`). Entering a `Loop` creates a loop i
 
 | Data | Handling |
 | --- | --- |
-| Node inputs, outputs, `data`, temporary `ctx.state`, and pending data | Isolated per iteration; temporary results from earlier iterations are unavailable |
+| Node inputs, outputs, `data`, temporary `ctx.taskState`, and pending data | Isolated per iteration; temporary results from earlier iterations are unavailable |
 | Values carried between iterations | Passed from the return node's `value` to the next entry |
 | Inputs, variables, and application context | Copied from data at loop entry; changes inside an iteration do not automatically write back to the parent graph or other iterations |
+| Business state `ctx.state` | Shared within the task. Once committed, updates remain visible if a later iteration fails. To update only after loop success, write from the `done` path |
 | `nodeState`, services, and external systems | Can remain shared; business code must avoid interference |
 
 Ordinary subgraphs called from the body also use the current iteration's isolated data. Repeated or concurrent invocations of the same `Loop` record their data separately.
+
+Inputs with multiple sources use the [same selection rules](../README.md#multiple-data-sources-for-one-input) within each frame. Data from another iteration cannot satisfy a dependency in the current frame.
 
 The execution context includes `frameId` and read-only `loop` information: invocation ID, loop node ID, zero-based iteration index, and parent frame ID.
 
@@ -64,7 +65,7 @@ Configuration belongs in the node's `loop` field; the current version is 1. The 
 Defaults allow at most 1000 iterations per loop, 10000 node activations per task including nested loops and control nodes, and 8 nesting levels. The latest 100 finished iterations are retained by default. Iteration, activation, and nesting limits are hard limits; node configuration can only lower the per-invocation iteration count.
 
 ```ts
-const engine = new Engine(runtime, {
+const engine = new Engine(registry, {
   maxLoopIterations: 1000,
   maxNodeActivations: 10_000,
   maxLoopDepth: 8,
@@ -72,7 +73,9 @@ const engine = new Engine(runtime, {
 })
 ```
 
-`timeoutMs` limits the loop's total running time, excluding breakpoint pauses. The engine periodically yields to the event loop. Stopping can cancel active frames, but does not wait indefinitely for business Promises that ignore cancellation or undo external operations already performed. Breakpoints can be hit again in each iteration and carry the same loop context information.
+`timeoutMs` limits the loop's total running time, excluding breakpoint pauses. Time spent awaiting business input through `ctx.interrupt()` counts toward this limit. Interrupt requests from a loop carry its frame and iteration scope. The engine periodically yields to the event loop. Stopping can cancel active frames, but does not wait indefinitely for business Promises that ignore cancellation or undo external operations already performed. Breakpoints can be hit again in each iteration and carry the same loop context information.
+
+The engine checks the deadline before committing an iteration and before publishing the final output, including when synchronous work delays the timer.
 
 ## Event sources and restrictions
 
@@ -106,6 +109,8 @@ engine.on('loop:finished', (taskId, invocation) => {})
 ```
 
 Queries return copies. Each task retains the latest 100 finished iterations by default, plus active iterations. Evicting iteration records does not affect the final result. Use `frameId` to select a specific iteration when multiple loops run concurrently. Queries by the original `nodeId` provide aggregated status and the latest completed data. `getLoopInvocations` reports `reason` as `break` when the body decides to end, or `limit` when the iteration limit is reached.
+
+Use the [execution log](execution-trace.md) to link an invocation's `activationId` to its caller and inspect individual node outcomes by `frameId`. Trace and iteration records have independent retention limits.
 
 ## Code and tests
 

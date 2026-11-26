@@ -1,9 +1,9 @@
-import { Node } from '../../Node'
+import { defineNode } from '../../Node'
 import { LoopNode, LoopEntryNode, LoopReturnNode } from './Loop'
 export { LoopNode, LoopEntryNode, LoopReturnNode, DEFAULT_LOOP_CONFIG } from './Loop'
 
-class StartNode extends Node {
-  static definition = {
+const StartNode = defineNode({
+  definition: {
     inputs: [] as const,
     outputs: [
       { name: 'start', type: 'exec' }
@@ -11,14 +11,14 @@ class StartNode extends Node {
     style: {
       header: { background: '#4CAF50', color: '#FFFFFF' }
     },
-    title: 'Start',
-    type: 'start'
-  }
+    name: 'Start',
+    kind: 'start'
+  },
 
-  static readonly type = 'start'
-}
-export class EndNode extends Node {
-  static definition = {
+  type: 'start',
+})
+export const EndNode = defineNode({
+  definition: {
     inputs: [
       { name: 'end', type: 'exec' }
     ] as const,
@@ -26,32 +26,37 @@ export class EndNode extends Node {
     style: {
       header: { background: '#F44336', color: '#FFFFFF' }
     },
-    title: 'End',
-    type: 'end'
-  }
+    name: 'End',
+    kind: 'end'
+  },
 
-  static readonly type = 'end'
-}
+  type: 'end',
+})
 
-class SubgraphNode extends Node {
-  static definition = {
+const SubgraphNode = defineNode({
+  definition: {
     inputs: [
       { name: 'subgraph', type: 'exec' },
       { name: 'input', type: 'any', label: '' }
     ] as const,
     outputs: [
       { name: 'subgraph', type: 'exec' },
-      { name: 'input', type: 'any', label: 'Result' }
+      { name: 'input', type: 'any', label: 'Result', showLabel: false }
     ] as const,
     style: {
-      header: { background: '#2196F3', color: '#FFFFFF' }
+      header: { background: '#2196F3', color: '#FFFFFF' },
+      ports: {
+        // Subgraph calls are compact; smaller dots keep the card light.
+        input: { port: { r: 4, strokeWidth: 1 } },
+        output: { port: { r: 4, strokeWidth: 1 } }
+      }
     },
-    title: 'Subgraph',
-    type: 'subgraph'
-  }
+    name: 'Subgraph',
+    kind: 'subgraph'
+  },
 
-  static readonly type = 'subgraph'
-}
+  type: 'subgraph',
+})
 
 Object.defineProperty(StartNode, 'type', {
   writable: false,

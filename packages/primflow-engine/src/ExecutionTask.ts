@@ -1,11 +1,16 @@
-import type { JsonGraph, NodeClassType, NodeExecutionStatus } from '@lyx-pj/primflow-model'
+import { describeFailure } from './RetryController'
+import type { JsonGraph, JsonValue, NodeClassType, NodeExecutionStatus } from '@lyx-pj/primflow-model'
 import type { TaskCallbacks, TaskScheduler } from './TaskScheduler'
-import type { NodeExecutionData, TaskDefinition, TaskSnapshot, LoopInvocationSnapshot, LoopIterationSnapshot } from './types'
+import type { NodeExecutionData, TaskDefinition, TaskSnapshot, LoopInvocationSnapshot, LoopIterationSnapshot, TaskStateCommit, TaskTraceOptions } from './types'
 import { LoopExecutionError } from './LoopController'
+import type { TaskStateStore } from './TaskStateStore'
+import { TaskTraceRecorder } from './TaskTrace'
 
 /** Observable execution instance; separate scheduling from records so snapshots survive stop. */
 export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
   readonly id: string
+  readonly state: TaskStateStore
+  readonly trace?: TaskTraceRecorder
   private info: TaskSnapshot
   private scheduler?: TaskScheduler<NodeDefs>
   private operations = 0
@@ -21,8 +26,10 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
   private iterations: LoopIterationSnapshot[] = []
   private frames = new Map<string, Map<string, NodeExecutionData>>()
 
-  constructor(definition: TaskDefinition, notify: (event: string, ...payload: unknown[]) => void) {
+  constructor(definition: TaskDefinition, trace: false | Required<TaskTraceOptions>, notify: (event: string, ...payload: unknown[]) => void) {
     this.id = definition.id
+    this.state = definition.state
+    if (trace) this.trace = new TaskTraceRecorder(this.id, trace)
     this.notify = notify
     this.graph = structuredClone(definition.json)
     this.cancelled = new Promise((resolve) => {
@@ -31,10 +38,12 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
     this.info = {
       id: this.id,
       parentTaskId: definition.parentTaskId,
+      parentActivationId: definition.parentActivationId,
       trigger: definition.trigger,
       status: 'running',
       startedAt: Date.now(),
       pausedNode: null,
+      interrupts: [],
       errors: [],
     }
   }
@@ -42,6 +51,7 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
   callbacks(base: Pick<TaskCallbacks, 'emit' | 'nodeState'>): TaskCallbacks {
     return {
       ...base,
+      trace: this.trace,
       activity: (delta) => {
         if (this.disposed) return
         this.operations += delta
@@ -49,15 +59,23 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
       },
       notify: (event, ...payload) => {
         if (this.disposed) return
+        if (event === 'task:state:committed' && this.trace) {
+          const { nodeId, version } = payload[0] as TaskStateCommit
+          this.trace.record({ type: 'state:committed', nodeId, version })
+        }
         if (event === 'node:error') {
           const error = payload[0]
           this.info.errors.push({
             nodeId: error instanceof LoopExecutionError ? error.nodeId : payload[1] as string,
             message: String(error),
+            ...(typeof error === 'object' && error !== null && 'retryable' in error && { failure: describeFailure(error) }),
             ...(error instanceof LoopExecutionError ? { frameId: error.frameId, loop: error.loop } : {}),
           })
         }
         this.refresh()
+        if (this.disposed || event === 'interrupts:changed') return
+        // A task observer may synchronously resume an interrupt before the node event is delivered.
+        if (event === 'node:status:changed' && this.scheduler?.getNodeStatus(payload[0] as string) !== payload[1]) return
         this.notify(event, this.id, ...payload)
       },
     }
@@ -86,22 +104,29 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
     const previous = this.info.status
     const previousPause = this.info.pausedNode
     this.info.pausedNode = this.scheduler?.pausedNode ?? null
+    const previousInterrupts = this.info.interrupts
+    this.info.interrupts = this.scheduler?.interrupts ?? []
     this.info.status =
       this.scheduler?.status === 'paused'
         ? 'paused'
-        : this.operations > 0
-          ? 'running'
-          : this.info.errors.length
-            ? 'failed'
-            : this.scheduler?.waiting
-              ? 'waiting'
-              : 'completed'
+        : this.info.interrupts.length
+          ? 'interrupted'
+          : this.operations > 0
+            ? 'running'
+            : this.info.errors.length
+              ? 'failed'
+              : this.scheduler?.waiting
+                ? 'waiting'
+                : 'completed'
     this.info.endedAt = ['completed', 'failed'].includes(this.info.status)
       ? (this.info.endedAt ?? Date.now())
       : undefined
+    if (previous !== this.info.status) this.trace?.record({ type: 'task:status', status: this.info.status })
     if (
       previous !== this.info.status ||
       previousPause !== this.info.pausedNode ||
+      previousInterrupts.length !== this.info.interrupts.length ||
+      previousInterrupts.some((item, index) => item !== this.info.interrupts[index]) ||
       this.reportedErrors !== this.info.errors.length
     ) {
       this.reportedErrors = this.info.errors.length
@@ -119,7 +144,8 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
     return structuredClone(this.graph)
   }
   snapshot(): TaskSnapshot {
-    return structuredClone(this.info)
+    const attempts = this.scheduler?.retries.attempts
+    return structuredClone(attempts?.length ? { ...this.info, attempts } : this.info)
   }
   getNodeStatuses() {
     return this.scheduler?.getNodeStatuses() ?? new Map(this.statuses)
@@ -144,6 +170,9 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
   resume() {
     this.scheduler?.resume()
   }
+  resumeInterrupt(interruptId: string, answer: JsonValue) {
+    return this.scheduler?.resumeInterrupt(interruptId, answer) ?? false
+  }
   setBreakpoint(nodeId: string, enabled: boolean) {
     this.scheduler?.setBreakpoint(nodeId, enabled)
   }
@@ -151,6 +180,7 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
     if (this.disposed) return
     this.info.errors.push({ nodeId: '', message: String(error) })
     this.info.status = 'failed'
+    this.trace?.record({ type: 'task:status', status: 'failed' })
     this.info.endedAt = Date.now()
     this.notify('task:changed', this.snapshot())
     this.notify('node:error', this.id, error, '')
@@ -164,10 +194,16 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
       const data = this.scheduler?.getNodeExecutionData(id)
       if (data) this.data.set(id, structuredClone(data))
     }
+    const cancelledNodes = this.scheduler?.getActiveNodeIds() ?? []
+    for (const id of cancelledNodes) this.statuses.set(id, 'cancelled')
     this.disposed = true
     this.cancel()
     this.scheduler?.stop()
     if (this.scheduler) {
+      const attempts = structuredClone(this.scheduler.retries.attempts)
+      if (attempts.length) this.info.attempts = attempts.map((attempt) =>
+        attempt.status === 'running' ? { ...attempt, status: 'cancelled' } : attempt,
+      )
       this.loops = structuredClone([...this.scheduler.loops.invocations.values()])
       this.iterations = structuredClone([...this.scheduler.loops.iterations.values()])
       for (const loop of this.loops) if (loop.status === 'running') loop.status = 'cancelled'
@@ -176,8 +212,15 @@ export class ExecutionTask<NodeDefs extends Record<string, NodeClassType>> {
     }
     this.scheduler = undefined
     this.info.pausedNode = null
+    this.info.interrupts = []
     this.info.endedAt ??= Date.now()
-    if (before === 'running' || before === 'waiting' || before === 'paused') this.info.status = 'cancelled'
+    if (before === 'running' || before === 'waiting' || before === 'paused' || before === 'interrupted') {
+      this.info.status = 'cancelled'
+      this.trace?.cancelActive()
+      this.trace?.record({ type: 'task:status', status: 'cancelled' })
+    }
+    this.trace?.close('cancelled')
+    for (const id of cancelledNodes) this.notify('node:status:changed', this.id, id, 'cancelled')
     this.notify('task:changed', this.snapshot())
   }
 }

@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src", "tests/service-types.test.ts", "tests/services.test.ts", "tests/dataTypes.test.ts", "tests/progress.test.ts", "tests/streams.test.ts"]
+}

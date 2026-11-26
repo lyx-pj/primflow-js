@@ -1,4 +1,4 @@
-import type { JsonLink, JsonNode } from '../types'
+import { validateJsonNode, type JsonLink, type JsonNode } from '../types'
 
 export interface NormalizeStartOptions {
   /**
@@ -19,7 +19,8 @@ export function normalizeStartNodes(nodes: JsonNode[], links: JsonLink[], option
   /** Retained Start port ids used to filter links. */
   const startPorts = new Map<string, Set<string>>()
   const normalizedNodes = nodes.map(node => {
-    if (node.nodeType !== 'start') return node
+    validateJsonNode(node)
+    if (node.definitionId !== 'start') return node
     const exec = node.outputs.find(port => port.type === 'exec') ??
       node.outputs.find(port => !port.type && ['start', 'exec', 'next'].includes(port.name))
     const output = { name: 'start', type: 'exec' as const, id: exec?.id || 'out-start' }
@@ -32,7 +33,7 @@ export function normalizeStartNodes(nodes: JsonNode[], links: JsonLink[], option
     startPorts.set(node.id, new Set([output.id, ...dataOutputs.map(port => port.id!)]))
     return {
       ...node,
-      values: {},
+      inputValues: {},
       inputs: dataInputs.map(port => ({ ...port })),
       outputs: [output, ...dataOutputs.map(port => ({ ...port }))],
     }

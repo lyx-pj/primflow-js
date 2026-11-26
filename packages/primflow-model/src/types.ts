@@ -1,5 +1,9 @@
+import type { StreamWriter } from './DataTypes'
+import type { NodeRetryInfo } from './NodeExecutionError'
 /* oxlint-disable typescript/no-explicit-any */
 import type { NodeStyle, LinkStyle } from './NodeRegistry'
+import type { JsonValue, TaskState } from './TaskState'
+import type { AnyServiceMap, ServiceContext, ServiceMap } from './Services'
 
 /**
  * Change event types.
@@ -17,7 +21,7 @@ export const ChangedEventType = {
 export type ChangedEventType = (typeof ChangedEventType)[keyof typeof ChangedEventType]
 
 /** Temporary execution state, excluded from persistent graph configuration. */
-export type NodeExecutionStatus = 'idle' | 'pending' | 'running' | 'completed'
+export type NodeExecutionStatus = 'idle' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped' | 'interrupted'
 
 /** Minimal port description shared by execution contexts and serialization. */
 export interface PortPrototype {
@@ -46,54 +50,84 @@ export type LoopScope = {
   parentFrameId?: string
 }
 
-export type ExecContext = {
+export type NodeEvent = { readonly name: string; readonly payload: readonly unknown[] }
+
+export type NodeRetryPolicy = {
+  /** The node can repeat the same logical operation safely, including external effects. */
+  idempotent: boolean
+  /** Number of additional executions after the first failure. Defaults to zero. */
+  maxRetries?: number
+  /** Execution output used when an error remains after recovery. */
+  fallback?: { port: string; outputs?: Readonly<Record<string, JsonValue>> }
+}
+
+export type NodeExecutionContext<S extends ServiceMap = AnyServiceMap> = {
+  /** Present when the executor was activated by a business event. */
+  event?: NodeEvent
+  /** Attempt information for scheduled executors with an explicit retry policy. */
+  retry?: NodeRetryInfo
   /** Current task; absent for standalone node execution. */
   taskId?: string
   frameId?: string
   loop?: Readonly<LoopScope>
-  /** Explicitly shared lifecycle resources; use state for temporary business data. */
+  /** Shared business state owned by the current task. */
+  state: TaskState
+  /** Explicitly shared lifecycle resources; use taskState for temporary business data. */
   nodeState?: Record<string, unknown>
   /** Task-local and further isolated by frame inside loops; excluded from serialization. */
-  state?: Record<string, unknown>
+  taskState?: Record<string, unknown>
   /** Aborted on stop; async executors can cancel requests, timers, and other resources. */
   signal?: AbortSignal
   getInput: <T = unknown>(name: string) => T | undefined
   setOutput: (name: string, value: unknown) => void
   emitEvent: (eventName: string, ...args: unknown[]) => void
+  openStream: (name: string) => StreamWriter
+  getStream: (name: string) => AsyncIterable<unknown>
+  emitProgress: (channel: string, value: JsonValue) => void
   /**
    * Hand off to downstream execution ports.
    *
    * The scheduler returns a Promise for downstream completion, allowing loops to await each iteration.
    */
   next: (nextExecs?: Array<string>) => void | Promise<void>
-  data?: unknown
-  services: { get: (name: string) => unknown }
-  ctx?: unknown
+  /** Suspend this scheduled activation until the application supplies a value. */
+  interrupt: (value: JsonValue) => Promise<JsonValue>
+  /** Application configuration stored with the node. */
+  data?: JsonValue
+  /** Services registered on the engine, typed by the application's service map. */
+  services: ServiceContext<S>
+  context?: unknown
   error?: unknown
   inputs: PortPrototype[]
   outputs: PortPrototype[]
 }
 
-export type ExecutorFn = (ctx: ExecContext) => Promise<any> | any
+export type ExecutorFn<S extends ServiceMap = AnyServiceMap> = (ctx: NodeExecutionContext<S>) => Promise<any> | any
 
 export type EventFn = (eventName: string, ...args: any[]) => { trigger?: boolean } | void
 
-export type NodeEventHandler = (ctx: ExecContext, ...payload: unknown[]) => void | Promise<void>
+export type NodeEventContext<S extends ServiceMap = AnyServiceMap> = NodeExecutionContext<S> & {
+  /** Request an executor activation in this event task. */
+  executeSelf: () => Promise<void>
+}
+
+export type NodeEventHandler<S extends ServiceMap = AnyServiceMap> = (ctx: NodeEventContext<S>, ...payload: unknown[]) => void | Promise<void>
 export type NodeCleanup = () => void | Promise<void>
 
-/** Lifecycle context without next; deactivation and destruction retain access to instance state and resources. */
-export type NodeLifecycleContext = Omit<ExecContext, 'next' | 'state' | 'signal'> & {
+/** Lifecycle context for instance state and resources. */
+export type NodeLifecycleContext<S extends ServiceMap = AnyServiceMap> = Omit<NodeExecutionContext<S>, 'next' | 'interrupt' | 'openStream' | 'getStream' | 'emitProgress' | 'state' | 'taskState' | 'nodeState' | 'signal'> & {
   nodeId: string
   nodeType: string
   signal: AbortSignal
-  state: Record<string, unknown>
+  nodeState: Record<string, unknown>
   /** Subscribe to session business events; automatically unsubscribe on stop. */
-  onEvent: (eventName: string, handler: NodeEventHandler) => () => void
+  on: (eventName: string, handler: NodeEventHandler<S>) => () => void
+  once: (eventName: string, handler: NodeEventHandler<S>) => () => void
   /** Register cleanup to run after deactivation and before destruction. */
   onCleanup: (cleanup: NodeCleanup) => void
 }
 
-export type NodeLifecycleHook = (ctx: NodeLifecycleContext) => void | Promise<void>
+export type NodeLifecycleHook<S extends ServiceMap = AnyServiceMap> = (ctx: NodeLifecycleContext<S>) => void | Promise<void>
 
 /**
  * Minimal Node requirements for its canvas host.
@@ -127,23 +161,29 @@ export interface ToolsViewHost {
 
 export interface JsonNode {
   breakpoint?: boolean
+  /** Collapsed presentation for a container card; omitted means expanded. */
+  collapsed?: boolean
   position: { x: number; y: number }
   title?: string
   id: string
-  type: string
-  nodeType: string
-  data?: unknown
-  values: Record<string, unknown>
-  subgraphId?: string
+  definitionId: string
+  kind: string
+  data?: JsonValue
+  inputValues: Record<string, unknown>
+  targetGraphId?: string
   loop?: LoopConfig
   inputs: {
     name: string
     id: string
     label?: string
     type?: string
+    editor?: 'select' | 'textarea'
+    editorWidth?: number
     options?: { label: string; value: string }[]
     showPort?: boolean
     showInput?: boolean
+    showLabel?: boolean
+    labelPosition?: { x?: number; y?: number }
   }[]
   outputs: {
     name: string
@@ -151,8 +191,28 @@ export interface JsonNode {
     label?: string
     type?: string
     showPort?: boolean
+    showLabel?: boolean
+    labelPosition?: { x?: number; y?: number }
   }[]
   style?: NodeStyle
+}
+
+/** Read and validate the definition ID of a graph node. */
+export function getJsonNodeDefinitionId(node: JsonNode): string {
+  if (typeof node.definitionId !== 'string' || !node.definitionId.trim()) {
+    throw new Error(`Node "${node.id}" has no definition ID.`)
+  }
+  return node.definitionId
+}
+
+export function validateJsonNode(node: JsonNode): void {
+  getJsonNodeDefinitionId(node)
+  if (typeof node.kind !== 'string' || !node.kind.trim()) {
+    throw new Error(`Node "${node.id}" has no kind.`)
+  }
+  if (!node.inputValues || typeof node.inputValues !== 'object' || Array.isArray(node.inputValues)) {
+    throw new Error(`Node "${node.id}" must have an inputValues object.`)
+  }
 }
 
 export interface JsonLink {
@@ -170,7 +230,7 @@ export interface JsonLink {
 
 export interface JsonVariable {
   name: string
-  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any'
+  type: string
   value: unknown
 }
 

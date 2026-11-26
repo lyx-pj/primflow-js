@@ -2,7 +2,7 @@
 
 English | [简体中文](subgraphs.zh-CN.md)
 
-Subgraphs can be embedded in their owning graph's `JsonGraph.subgraphs`, or saved by the application as standalone files referenced by a calling node's `subgraphId`. This document describes their JSON structure and `Start` port rules. See [engine subgraph parameters](../../primflow-engine/docs/subgraphs.md) for parameter passing and [canvas subgraphs and navigation](../../primflow-canvas/docs/subgraphs.md) for entering and returning.
+Subgraphs can be embedded in their owning graph's `JsonGraph.subgraphs`, or saved by the application as standalone files referenced by a calling node's `targetGraphId`. This document describes their JSON structure and `Start` port rules. See [engine subgraph parameters](../../primflow-engine/docs/subgraphs.md) for parameter passing and [canvas subgraphs and navigation](../../primflow-canvas/docs/subgraphs.md) for entering and returning.
 
 ## JSON structure
 
@@ -19,9 +19,11 @@ type JsonGraph = {
 }
 ```
 
+A node's `graphId` comes from its position in the graph. The root uses an empty string. `targetGraphId` refers to the called subgraph or loop body.
+
 See [types.ts](../src/types.ts) for field definitions.
 
-The meaning of `JsonNode.subgraphId` depends on the current graph:
+The meaning of `JsonNode.targetGraphId` depends on the current graph:
 
 | Does the graph contain a region with that id? | Meaning |
 | --- | --- |
@@ -29,6 +31,8 @@ The meaning of `JsonNode.subgraphId` depends on the current graph:
 | No | An external subgraph reference; the canvas does not create an empty region. The application opens its content or injects it before execution |
 
 A `Loop` body is also a region in `subgraphs`, but uses `LoopEntry` / `LoopReturn`; see [Loop nodes](loops.md).
+
+A subgraph call node can persist its card's collapsed presentation as `JsonNode.collapsed`. The field defaults to expanded, and graph JSON stores no preview image; canvas renders previews from the referenced subgraph data.
 
 ## Start port handling
 
@@ -43,7 +47,7 @@ A `Loop` body is also a region in `subgraphs`, but uses `LoopEntry` / `LoopRetur
 
 By default, `normalizeStartNodes` keeps only execution outputs and removes links to ports that no longer exist. With `keepDataPorts: true`, it preserves explicitly defined data ports. The main graph's `Start` only triggers execution; it does not automatically receive startup business data. See [normalizeStartNodes.ts](../src/shared/normalizeStartNodes.ts). The engine uses `keepDataPorts: true` when loading embedded subgraphs; the canvas exposes it as `fromJSON(json, { keepStartPorts })`.
 
-Normalization clears `Start.values` and uses stable execution output IDs, defaulting to `out-start`. The main graph has no parameter source and keeps the default behavior; only subgraph entries preserve parameters.
+Normalization clears `Start.inputValues` and uses stable execution output IDs, defaulting to `out-start`. The main graph has no parameter source and keeps the default behavior; only subgraph entries preserve parameters.
 
 ## Ordinary subgraph inputs and outputs
 

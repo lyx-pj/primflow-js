@@ -1,37 +1,62 @@
-import type { ExecContext } from '@lyx-pj/primflow-model'
-import type { NodeInstanceType } from './Runtime'
+import { isDataPort } from '@lyx-pj/primflow-model'
+import type { JsonValue, NodeExecutionContext, ServiceContext } from '@lyx-pj/primflow-model'
+import type { ExecutionNode } from './ExecutionNode'
 
 export type ContextOptions = {
   signal?: AbortSignal
   taskId?: string
-  ctx?: unknown
+  context?: unknown
   error?: unknown
   nodeState?: Record<string, unknown>
   isActive: () => boolean
-  getService: (name: string) => unknown
+  services: ReadonlyMap<string, unknown>
+  progress?: (channel: string, value: JsonValue) => void
+  onOutput?: (name: string, value: unknown) => void
   emit: (name: string, ...payload: unknown[]) => void
 }
 
+function createServiceContext(services: ReadonlyMap<string, unknown>): ServiceContext {
+  return {
+    get: (name) => services.get(name),
+    require(name) {
+      if (!services.has(name)) throw new Error(`No service registered with name "${name}".`)
+      return services.get(name)
+    },
+  }
+}
+
 /** Bind each context to a specific task and node; async callbacks never rely on a global current task. */
-export function createExecutionContext(node: NodeInstanceType, options: ContextOptions): ExecContext {
+export function createExecutionContext(
+  node: ExecutionNode,
+  options: ContextOptions,
+): Omit<NodeExecutionContext, 'state'> {
   return {
     taskId: options.taskId,
     signal: options.signal,
-    state: node.state,
+    taskState: node.state,
     nodeState: options.nodeState,
-    ctx: options.ctx,
+    context: options.context,
     error: options.error,
     data: node.data,
     getInput: <T = unknown>(name: string) => node.getInput(name) as T | undefined,
     setOutput: (name, value) => {
-      if (options.isActive()) node.setOutput(name, options.taskId ? structuredClone(value) : value)
+      if (!options.isActive()) return
+      const output = options.taskId ? structuredClone(value) : value
+      node.setOutput(name, output)
+      options.onOutput?.(name, output)
     },
-    emitEvent: (name, ...payload) => {
-      if (options.isActive()) options.emit(name, ...payload)
+    emitEvent: (name, ...args) => {
+      if (options.isActive()) options.emit(name, ...args)
+    },
+    openStream: () => { throw new Error('Streams require a scheduled root-graph execution.') },
+    getStream: () => { throw new Error('Streams require a scheduled stream input.') },
+    emitProgress: (channel, value) => {
+      if (options.isActive()) options.progress?.(channel, value)
     },
     next: () => {},
-    services: { get: options.getService },
-    inputs: node.inputs.filter((port) => port.type !== 'exec' && port.type !== 'spacer'),
-    outputs: node.outputs.filter((port) => port.type !== 'exec' && port.type !== 'spacer'),
+    interrupt: () => { throw new Error('Interrupts require a scheduled node activation.') },
+    services: createServiceContext(options.services),
+    inputs: node.inputs.filter((port) => isDataPort(port.type)),
+    outputs: node.outputs.filter((port) => isDataPort(port.type)),
   }
 }

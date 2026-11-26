@@ -1,18 +1,17 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import {
   EventEmitter,
-  Node,
+  defineNode,
   NodeRegistry,
-  type ExecContext,
+  type NodeExecutionContext,
   type JsonGraph,
   type JsonNode,
   type NodeLifecycleContext,
 } from '@lyx-pj/primflow-model'
 import { Engine } from '../src/Engine'
-import { Runtime } from '../src/Runtime'
 
-class Step extends Node {
-  static definition = {
+const Step = defineNode({
+  definition: {
     inputs: [
       { name: 'exec', type: 'exec' },
       { name: 'value', type: 'any' },
@@ -21,18 +20,18 @@ class Step extends Node {
       { name: 'next', type: 'exec' },
       { name: 'value', type: 'any' },
     ] as const,
-  }
-  static executor = (ctx: ExecContext) => ctx.next()
-}
+  },
+  executor: (ctx: NodeExecutionContext) => ctx.next(),
+})
 
 function node(id: string, nodeType = 'step', breakpoint = false): JsonNode {
   return {
     id,
-    nodeType,
+    definitionId: nodeType,
     breakpoint,
-    type: nodeType === 'start' ? 'start' : 'default',
+    kind: nodeType === 'start' ? 'start' : 'default',
     position: { x: 0, y: 0 },
-    values: {},
+    inputValues: {},
     inputs:
       nodeType === 'start'
         ? []
@@ -68,11 +67,10 @@ interface StoppableEngine {
 }
 const engines: StoppableEngine[] = []
 function setup(NodeClass: typeof Step, json = graph()) {
-  const runtime = new Runtime(new NodeRegistry().register('step', NodeClass))
-  const engine = new Engine(runtime)
+  const engine = new Engine(new NodeRegistry().register('step', NodeClass))
   engines.push(engine)
-  engine.fromJSON(json)
-  return { engine, runtime }
+  engine.loadGraph(json)
+  return { engine }
 }
 
 afterEach(async () => {
@@ -82,33 +80,34 @@ afterEach(async () => {
 
 test('all main and subgraph instances activate once before task execution starts', async () => {
   const calls: string[] = []
-  class LifecycleStep extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const LifecycleStep = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       calls.push(`active:${ctx.nodeId}`)
-    }
-    static onDeactivate = (ctx: NodeLifecycleContext) => {
+    },
+    onDeactivate: (ctx: NodeLifecycleContext) => {
       calls.push(`inactive:${ctx.nodeId}`)
-    }
-    static onDestroy = (ctx: NodeLifecycleContext) => {
+    },
+    onDestroy: (ctx: NodeLifecycleContext) => {
       calls.push(`destroy:${ctx.nodeId}`)
-    }
-    static executor = (ctx: ExecContext) => {
+    },
+    executor: (ctx: NodeExecutionContext) => {
       calls.push('execute')
       return ctx.next()
-    }
-  }
+    },
+  })
   const json = graph([node('start', 'start'), node('a'), node('b'), node('disconnected')])
   json.links.pop()
   const child = graph([node('child-start', 'start'), node('child-step')])
   json.subgraphs.child = { nodes: child.nodes, links: child.links, viewport: child.viewport }
-  const { engine, runtime } = setup(LifecycleStep, json)
-  await engine.process()
+  const { engine } = setup(LifecycleStep, json)
+  await engine.start()
   expect(calls).toEqual(['active:a', 'active:b', 'active:disconnected', 'active:child-step', 'execute', 'execute'])
   expect(engine.status).toBe('running')
   expect(calls.some((call) => call.startsWith('destroy:'))).toBe(false)
   engine.stop().stop()
   expect(engine.status).toBe('stopped')
-  expect(runtime.nodes.size).toBe(0)
   await engine.whenStopped()
   for (const id of ['a', 'b', 'disconnected', 'child-step']) {
     expect(calls.filter((call) => call === `inactive:${id}`)).toHaveLength(1)
@@ -120,29 +119,34 @@ test('all main and subgraph instances activate once before task execution starts
 test('activation subscriptions wait for readiness, support unsubscribe, and stop receiving events after stop', async () => {
   let finish!: () => void
   let unsubscribe!: () => void
+  let lifecycleContext!: NodeLifecycleContext
   const received: unknown[] = []
-  class Subscriber extends Step {
-    static onActive = async (ctx: NodeLifecycleContext) => {
-      unsubscribe = ctx.onEvent('message', (_task, value) => {
+  const Subscriber = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: async (ctx: NodeLifecycleContext) => {
+      lifecycleContext = ctx
+      unsubscribe = ctx.on('message', (_task, value) => {
         received.push(value)
       })
       await new Promise<void>((resolve) => {
         finish = resolve
       })
-    }
-  }
+    },
+  })
   const { engine } = setup(Subscriber)
-  const process = engine.process()
-  const event = engine.handleNodeEvents('message', 'During startup')
+  const process = engine.start()
+  const event = engine.dispatchEvent('message', 'During startup')
   await vi.waitFor(() => expect(finish).toBeDefined())
   expect(received).toEqual([])
   finish()
   await Promise.all([process, event])
+  expect(lifecycleContext).not.toHaveProperty('onEvent')
   expect(received).toEqual(['During startup'])
   unsubscribe()
-  await engine.handleNodeEvents('message', 'After unsubscribe')
+  await engine.dispatchEvent('message', 'After unsubscribe')
   engine.stop()
-  await engine.handleNodeEvents('message', 'After stop')
+  await engine.dispatchEvent('message', 'After stop')
   expect(received).toEqual(['During startup'])
 })
 
@@ -150,17 +154,19 @@ test('lifecycle subscriptions respect breakpoints without repeating activation o
   const active = vi.fn()
   const inactive = vi.fn()
   const receive = vi.fn()
-  class Subscriber extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const Subscriber = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       active()
-      ctx.onEvent('message', (_task, ...payload) => receive(...payload))
-    }
-    static onDeactivate = inactive
-  }
+      ctx.on('message', (_task, ...payload) => receive(...payload))
+    },
+    onDeactivate: inactive,
+  })
   const { engine } = setup(Subscriber, graph([node('start', 'start'), node('step', 'step', true)]))
-  const process = engine.process({ debug: true })
+  const process = engine.start({ debug: true })
   await vi.waitFor(() => expect(engine.status).toBe('paused'))
-  const event = engine.handleNodeEvents('message', 'awaiting resume')
+  const event = engine.dispatchEvent('message', 'awaiting resume')
   await vi.waitFor(() => expect(engine.getTasks().filter((task) => task.status === 'paused')).toHaveLength(2))
   expect(receive).not.toHaveBeenCalled()
   engine.resume()
@@ -175,11 +181,13 @@ test('deactivation clears old data and listeners; destruction clears temporary s
   const contexts: NodeLifecycleContext[] = []
   const received: string[] = []
   const calls: string[] = []
-  class ResourceStep extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const ResourceStep = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       contexts.push(ctx)
-      expect(ctx.state).toEqual({})
-      ctx.state.cache = ['Temporary data']
+      expect(ctx.nodeState).toEqual({})
+      ctx.nodeState.cache = ['Temporary data']
       const handler = (value: string) => {
         received.push(value)
       }
@@ -188,32 +196,29 @@ test('deactivation clears old data and listeners; destruction clears temporary s
         source.off('message', handler)
         calls.push('cleanup')
       })
-    }
-    static onDeactivate = (ctx: NodeLifecycleContext) => {
+    },
+    onDeactivate: (ctx: NodeLifecycleContext) => {
       expect(ctx.signal.aborted).toBe(true)
       ctx.setOutput('value', 'Old instance during cleanup')
-      delete ctx.state.cache
+      delete ctx.nodeState.cache
       calls.push('deactivate')
-    }
-    static onDestroy = (ctx: NodeLifecycleContext) => {
-      expect(ctx.state.cache).toBeUndefined()
+    },
+    onDestroy: (ctx: NodeLifecycleContext) => {
+      expect(ctx.nodeState.cache).toBeUndefined()
       calls.push('destroy')
-    }
-  }
-  const { engine, runtime } = setup(ResourceStep)
-  const first = runtime.nodes.get('step')!
-  await engine.process()
+    },
+  })
+  const { engine } = setup(ResourceStep)
+  await engine.start()
   source.emit('message', 'Running')
   engine.stop()
   await engine.whenStopped()
   source.emit('message', 'After stopping')
   expect(received).toEqual(['Running'])
   expect(calls).toEqual(['deactivate', 'cleanup', 'destroy'])
-  expect(first.state).toEqual({})
-  expect(first.outputValues).toEqual({})
-  await engine.process()
-  expect(runtime.nodes.get('step')).not.toBe(first)
-  expect(contexts[1].state).not.toBe(contexts[0].state)
+  expect(contexts[0].nodeState).toEqual({})
+  await engine.start()
+  expect(contexts[1].nodeState).not.toBe(contexts[0].nodeState)
   source.emit('message', 'Rerun')
   expect(received).toEqual(['Running', 'Rerun'])
 })
@@ -222,11 +227,13 @@ test('restart awaits asynchronous destruction and prevents overlapping startup o
   let finish!: () => void
   let waitForCleanup = true
   const calls: string[] = []
-  class AsyncCleanup extends Step {
-    static onActive = () => {
+  const AsyncCleanup = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: () => {
       calls.push('active')
-    }
-    static onDestroy = async () => {
+    },
+    onDestroy: async () => {
       calls.push('destroy:start')
       if (waitForCleanup)
         await new Promise<void>((resolve) => {
@@ -234,13 +241,13 @@ test('restart awaits asynchronous destruction and prevents overlapping startup o
         })
       waitForCleanup = false
       calls.push('destroy:end')
-    }
-  }
+    },
+  })
   const { engine } = setup(AsyncCleanup)
-  await engine.process()
+  await engine.start()
   engine.stop()
-  const restart = engine.process()
-  await expect(engine.process()).rejects.toThrow('stop the current run first')
+  const restart = engine.start()
+  await expect(engine.start()).rejects.toThrow('stop the current run first')
   await vi.waitFor(() => expect(finish).toBeDefined())
   expect(calls).toEqual(['active', 'destroy:start'])
   finish()
@@ -252,8 +259,10 @@ test('stop during activation aborts, awaits hook exit, then deactivates and dest
   let finish!: () => void
   let context!: NodeLifecycleContext
   const calls: string[] = []
-  class SlowActive extends Step {
-    static onActive = async (ctx: NodeLifecycleContext) => {
+  const SlowActive = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: async (ctx: NodeLifecycleContext) => {
       context = ctx
       calls.push('active:start')
       await new Promise<void>((resolve) => {
@@ -263,19 +272,19 @@ test('stop during activation aborts, awaits hook exit, then deactivates and dest
         calls.push('cleanup')
       })
       calls.push('active:end')
-    }
-    static onDeactivate = () => {
+    },
+    onDeactivate: () => {
       calls.push('deactivate')
-    }
-    static onDestroy = () => {
+    },
+    onDestroy: () => {
       calls.push('destroy')
-    }
-    static executor = () => {
+    },
+    executor: () => {
       calls.push('execute')
-    }
-  }
+    },
+  })
   const { engine } = setup(SlowActive)
-  const process = engine.process()
+  const process = engine.start()
   await vi.waitFor(() => expect(context).toBeDefined())
   engine.stop()
   expect(context.signal.aborted).toBe(true)
@@ -288,25 +297,27 @@ test('stop during activation aborts, awaits hook exit, then deactivates and dest
 test('activation failure cleans partially initialized and inactive instances and rejects startup', async () => {
   const failure = new Error('Initialization failed')
   const calls: string[] = []
-  class FailingActive extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const FailingActive = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       calls.push(`active:${ctx.nodeId}`)
       if (ctx.nodeId === 'b') throw failure
-    }
-    static onDeactivate = (ctx: NodeLifecycleContext) => {
+    },
+    onDeactivate: (ctx: NodeLifecycleContext) => {
       calls.push(`inactive:${ctx.nodeId}`)
-    }
-    static onDestroy = (ctx: NodeLifecycleContext) => {
+    },
+    onDestroy: (ctx: NodeLifecycleContext) => {
       calls.push(`destroy:${ctx.nodeId}`)
-    }
-    static executor = () => {
+    },
+    executor: () => {
       calls.push('execute')
-    }
-  }
+    },
+  })
   const { engine } = setup(FailingActive, graph([node('start', 'start'), node('a'), node('b'), node('c')]))
   const error = vi.fn()
   engine.on('node:error', error)
-  await expect(engine.process()).rejects.toBe(failure)
+  await expect(engine.start()).rejects.toBe(failure)
   expect(engine.status).toBe('stopped')
   expect(error).toHaveBeenCalledExactlyOnceWith(failure, 'b')
   expect(calls).toEqual(['active:a', 'active:b', 'inactive:b', 'inactive:a', 'destroy:c', 'destroy:b', 'destroy:a'])
@@ -314,26 +325,28 @@ test('activation failure cleans partially initialized and inactive instances and
 
 test('deactivation, cleanup, and destruction errors are reported without blocking other resource releases', async () => {
   const calls: string[] = []
-  class FailingCleanup extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const FailingCleanup = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       ctx.onCleanup(() => {
         calls.push(`cleanup:${ctx.nodeId}`)
         throw new Error('Cleanup failed')
       })
-    }
-    static onDeactivate = (ctx: NodeLifecycleContext) => {
+    },
+    onDeactivate: (ctx: NodeLifecycleContext) => {
       calls.push(`inactive:${ctx.nodeId}`)
       throw new Error('Deactivation failed')
-    }
-    static onDestroy = (ctx: NodeLifecycleContext) => {
+    },
+    onDestroy: (ctx: NodeLifecycleContext) => {
       calls.push(`destroy:${ctx.nodeId}`)
       throw new Error('Destruction failed')
-    }
-  }
+    },
+  })
   const { engine } = setup(FailingCleanup, graph([node('start', 'start'), node('a'), node('b')]))
   const error = vi.fn()
   engine.on('node:error', error)
-  await engine.process()
+  await engine.start()
   engine.stop()
   await engine.whenStopped()
   expect(error).toHaveBeenCalledTimes(6)
@@ -343,26 +356,28 @@ test('deactivation, cleanup, and destruction errors are reported without blockin
 test('reload destroys old nodes; new activation waits for cleanup without inheriting old runtime data', async () => {
   let finish!: () => void
   const calls: string[] = []
-  class Reloadable extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const Reloadable = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       calls.push(`active:${ctx.nodeId}`)
       if (ctx.data) (ctx.data as { value: string }).value = 'Runtime change'
-    }
-    static onDestroy = async (ctx: NodeLifecycleContext) => {
+    },
+    onDestroy: async (ctx: NodeLifecycleContext) => {
       if (ctx.nodeId === 'old')
         await new Promise<void>((resolve) => {
           finish = resolve
         })
       calls.push(`destroy:${ctx.nodeId}`)
-    }
-  }
+    },
+  })
   const json = graph([node('start', 'start'), node('old')])
   json.nodes[1].data = { value: 'Original configuration' }
   const { engine } = setup(Reloadable, json)
-  await engine.process()
+  await engine.start()
   expect(json.nodes[1].data).toEqual({ value: 'Original configuration' })
-  engine.fromJSON(graph([node('new-start', 'start'), node('new')]))
-  const process = engine.process()
+  engine.loadGraph(graph([node('new-start', 'start'), node('new')]))
+  const process = engine.start()
   await vi.waitFor(() => expect(finish).toBeDefined())
   expect(calls).toEqual(['active:old'])
   finish()
@@ -373,10 +388,12 @@ test('reload destroys old nodes; new activation waits for cleanup without inheri
 test('loaded nodes that never activated are destroyed once without deactivation', async () => {
   const inactive = vi.fn()
   const destroy = vi.fn()
-  class Prepared extends Step {
-    static onDeactivate = inactive
-    static onDestroy = destroy
-  }
+  const Prepared = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onDeactivate: inactive,
+    onDestroy: destroy,
+  })
   const { engine } = setup(Prepared)
   engine.stop().stop()
   await engine.whenStopped()
@@ -387,27 +404,29 @@ test('loaded nodes that never activated are destroyed once without deactivation'
 test('stop inside activation awaits hook exit without duplicate destruction or execution', async () => {
   const calls: string[] = []
   let stop!: () => void
-  class SelfStopping extends Step {
-    static onActive = async () => {
+  const SelfStopping = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: async () => {
       stop()
       await Promise.resolve()
       calls.push('active:end')
-    }
-    static onDeactivate = () => {
+    },
+    onDeactivate: () => {
       calls.push('deactivate')
-    }
-    static onDestroy = () => {
+    },
+    onDestroy: () => {
       calls.push('destroy')
-    }
-    static executor = () => {
+    },
+    executor: () => {
       calls.push('execute')
-    }
-  }
+    },
+  })
   const { engine } = setup(SelfStopping)
   stop = () => {
     engine.stop()
   }
-  await engine.process()
+  await engine.start()
   await engine.whenStopped()
   expect(calls).toEqual(['active:end', 'deactivate', 'destroy'])
 })
@@ -415,23 +434,25 @@ test('stop inside activation awaits hook exit without duplicate destruction or e
 test('unsubscribe or stop while paused discards undelivered lifecycle events', async () => {
   let unsubscribe!: () => void
   const received = vi.fn()
-  class Subscriber extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
-      unsubscribe = ctx.onEvent('message', (_task, ...payload) => received(...payload))
-    }
-  }
+  const Subscriber = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
+      unsubscribe = ctx.on('message', (_task, ...payload) => received(...payload))
+    },
+  })
   const { engine } = setup(Subscriber, graph([node('start', 'start'), node('step', 'step', true)]))
-  const process = engine.process({ debug: true })
+  const process = engine.start({ debug: true })
   await vi.waitFor(() => expect(engine.status).toBe('paused'))
-  const event = engine.handleNodeEvents('message')
+  const event = engine.dispatchEvent('message')
   unsubscribe()
   engine.resume()
   await Promise.all([process, event])
   expect(received).not.toHaveBeenCalled()
   engine.stop()
-  const restarted = engine.process({ debug: true })
+  const restarted = engine.start({ debug: true })
   await vi.waitFor(() => expect(engine.status).toBe('paused'))
-  const cancelled = engine.handleNodeEvents('message')
+  const cancelled = engine.dispatchEvent('message')
   engine.stop()
   await Promise.all([restarted, cancelled, engine.whenStopped()])
   expect(received).not.toHaveBeenCalled()
@@ -439,54 +460,59 @@ test('unsubscribe or stop while paused discards undelivered lifecycle events', a
 
 test('throwing lifecycle error observers do not block destruction', async () => {
   const destroyed: string[] = []
-  class Cleanup extends Step {
-    static onDeactivate = () => {
+  const Cleanup = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onDeactivate: () => {
       throw new Error('Deactivation failed')
-    }
-    static onDestroy = (ctx: NodeLifecycleContext) => {
+    },
+    onDestroy: (ctx: NodeLifecycleContext) => {
       destroyed.push(ctx.nodeId)
-    }
-  }
+    },
+  })
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const { engine } = setup(Cleanup, graph([node('start', 'start'), node('a'), node('b')]))
   engine.on('node:error', () => {
     throw new Error('Observer failed')
   })
-  await engine.process()
+  await engine.start()
   await engine.stop().whenStopped()
   expect(destroyed).toEqual(['b', 'a'])
 })
 
 test('loading failure destroys already deserialized nodes without leaving partial instances', async () => {
   const destroyed: string[] = []
-  class Prepared extends Step {
-    static onDestroy = (ctx: NodeLifecycleContext) => {
+  const Prepared = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onDestroy: (ctx: NodeLifecycleContext) => {
       destroyed.push(ctx.nodeId)
-    }
-  }
-  const { engine, runtime } = setup(Prepared)
-  expect(() => engine.fromJSON(graph([node('new-start', 'start'), node('new'), node('invalid', 'unknown')]))).toThrow()
+    },
+  })
+  const { engine } = setup(Prepared)
+  expect(() => engine.loadGraph(graph([node('new-start', 'start'), node('new'), node('invalid', 'unknown')]))).toThrow()
   await engine.whenStopped()
   expect(destroyed).toEqual(['step', 'new'])
-  expect(runtime.nodes.size).toBe(0)
 })
 
 test('loading and starting from abort callbacks cannot let old stop clear the new graph', async () => {
   let restart!: Promise<void>
   let reload!: () => void
   const activated: string[] = []
-  class Reloadable extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const Reloadable = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       activated.push(ctx.nodeId)
       if (ctx.nodeId === 'old') ctx.signal.addEventListener('abort', () => reload(), { once: true })
-    }
-  }
+    },
+  })
   const { engine } = setup(Reloadable, graph([node('old-start', 'start'), node('old')]))
   reload = () => {
-    engine.fromJSON(graph([node('new-start', 'start'), node('new')]))
-    restart = engine.process()
+    engine.loadGraph(graph([node('new-start', 'start'), node('new')]))
+    restart = engine.start()
   }
-  await engine.process()
+  await engine.start()
   engine.stop()
   await restart
   expect(activated).toEqual(['old', 'new'])
@@ -497,29 +523,32 @@ test('loading and starting from abort callbacks cannot let old stop clear the ne
 test('standalone runNode executes without workflow hooks or retained instances', async () => {
   const active = vi.fn()
   const execute = vi.fn()
-  class DirectStep extends Step {
-    static onActive = active
-    static executor = execute
-  }
-  const runtime = new Runtime(new NodeRegistry().register('step', DirectStep))
-  const engine = new Engine(runtime)
+  const DirectStep = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: active,
+    executor: execute,
+  })
+  const engine = new Engine(new NodeRegistry().register('step', DirectStep))
   await engine.runNode('step')
   expect(execute).toHaveBeenCalledTimes(1)
   expect(active).not.toHaveBeenCalled()
-  expect(runtime.nodes.size).toBe(0)
+  expect(engine.getTasks()).toEqual([])
 })
 
 test('throwing status observers still allow abort and complete lifecycle cleanup', async () => {
   let context!: NodeLifecycleContext
   const destroyed = vi.fn()
-  class Resource extends Step {
-    static onActive = (ctx: NodeLifecycleContext) => {
+  const Resource = defineNode({
+    ...Step,
+    definition: Step.definition,
+    onActive: (ctx: NodeLifecycleContext) => {
       context = ctx
-    }
-    static onDestroy = destroyed
-  }
+    },
+    onDestroy: destroyed,
+  })
   const { engine } = setup(Resource)
-  await engine.process()
+  await engine.start()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   engine.on('node:status:changed', (_id, status) => {
     if (status === 'idle') throw new Error('Status observer failed')

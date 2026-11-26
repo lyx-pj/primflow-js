@@ -1,15 +1,18 @@
-export type VariableDef =
-  | { name: string; type: 'string'; value: string }
-  | { name: string; type: 'number'; value: number }
-  | { name: string; type: 'boolean'; value: boolean }
-  | { name: string; type: 'array'; value: unknown[] }
-  | { name: string; type: 'object'; value: Record<string, unknown> }
-  | { name: string; type: 'any'; value: unknown }
+import { DataTypeRegistry } from './DataTypes'
+
+export type VariableDef = { name: string; type: string; value: unknown }
 
 export class VariableManager {
   private variables: Map<string, VariableDef> = new Map()
 
-  setVariable(variable: VariableDef) {
+  private readonly dataTypes: DataTypeRegistry
+
+  constructor(dataTypes = new DataTypeRegistry()) {
+    this.dataTypes = dataTypes
+  }
+
+  setVariable(variable: VariableDef, options?: { preserveInvalid?: boolean }) {
+    if (!options?.preserveInvalid) this.dataTypes.assertValue(variable.type, variable.value, `Variable "${variable.name}"`)
     this.variables.set(variable.name, variable)
     return this
   }
@@ -20,40 +23,8 @@ export class VariableManager {
       throw new Error(`Variable "${name}" does not exist.`)
     }
 
-    switch (variable.type) {
-      case 'string':
-        if (typeof value !== 'string') {
-          throw new Error(`Variable "${name}" expects a string value.`)
-        }
-        break
-      case 'number':
-        if (typeof value !== 'number') {
-          throw new Error(`Variable "${name}" expects a number value.`)
-        }
-        break
-      case 'boolean':
-        if (typeof value !== 'boolean') {
-          throw new Error(`Variable "${name}" expects a boolean value.`)
-        }
-        break
-      case 'array':
-        if (!Array.isArray(value)) {
-          throw new Error(`Variable "${name}" expects an array value.`)
-        }
-        break
-      case 'object':
-        if (typeof value !== 'object' || Array.isArray(value) || value === null) {
-          throw new Error(`Variable "${name}" expects an object value.`)
-        }
-        break
-      case 'any':
-        // Accept any type
-        break
-      default:
-        throw new Error(`Unknown variable type for "${name}".`)
-    }
-
-    this.variables.set(name, { ...variable, value } as VariableDef)
+    this.dataTypes.assertValue(variable.type, value, `Variable "${name}"`)
+    this.variables.set(name, { ...variable, value })
     return this
   }
 

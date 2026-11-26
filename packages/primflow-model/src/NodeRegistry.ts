@@ -1,5 +1,6 @@
+import { DataTypeRegistry, type DataType, type StreamType } from './DataTypes'
 import { builtinNodes, EndNode, type BuiltinNodeType } from './builtin/nodes'
-import type { NodeClassType } from './Node'
+import { resolveNodeDefinition, setRegisteredDefinitionId, type NodeClassType, type RegisteredNodeDefinition } from './Node'
 import { mergeDeep } from './shared/merge'
 
 const defaultNodeStyle: NodeStyle = {
@@ -21,6 +22,24 @@ const defaultNodeStyle: NodeStyle = {
       gap: 10,
       top: 0,
       bottom: 0
+    },
+    colors: {
+      string: '#56B4E9',
+      number: '#009E73',
+      boolean: '#E69F00',
+      array: '#CC79A7',
+      object: '#F0E442',
+      // A generic data port stays neutral; the lighter slate keeps its resting
+      // outline readable at the default resting opacity.
+      any: '#B8C4D6'
+    },
+    shapes: {
+      string: 'circle',
+      number: 'circle',
+      boolean: 'diamond',
+      array: 'bars',
+      object: 'square',
+      any: 'hexagon'
     },
     input: {
       port: {
@@ -58,19 +77,17 @@ const defaultLinkStyle: LinkStyle = {
   stroke: 'rgba(255, 255, 255, 0.5)',
   strokeWidth: 1,
   highlightStroke: 'blue',
-  byPortType: {
-    string: ['red', 'yellow', 'blue'],
-    number: ['#81C784'],
-    boolean: ['#FFD54F']
-  },
 }
 
 export class NodeRegistry<NodeDefs extends Record<string, unknown> = BuiltinNodeType> {
-  registry: NodeDefs = builtinNodes as unknown as NodeDefs
+  readonly registry: Readonly<NodeDefs> = { ...builtinNodes } as unknown as NodeDefs
+  readonly dataTypes = new DataTypeRegistry()
   nodeStyle: NodeStyle
   linkStyle: LinkStyle
 
   constructor(nodeStyle: NodeStyle = {}, linkStyle: LinkStyle = {}) {
+    for (const [id, NodeClass] of Object.entries(builtinNodes)) setRegisteredDefinitionId(NodeClass, id)
+    setRegisteredDefinitionId(EndNode, 'end')
     this.nodeStyle = mergeDeep(
       defaultNodeStyle as Record<string, unknown>,
       (nodeStyle || {}) as Record<string, unknown>
@@ -82,46 +99,57 @@ export class NodeRegistry<NodeDefs extends Record<string, unknown> = BuiltinNode
     )
   }
 
+  registerDataType(type: DataType | StreamType): this {
+    this.dataTypes.register(type)
+    return this
+  }
+
   register<K extends string, V extends NodeClassType>(
-    nodeType: K,
+    definitionId: K,
     NodeClass: V
   ): NodeRegistry<NodeDefs & { [P in K]: V }> {
+    if (definitionId.trim() === '') throw new Error('Node definition ID must not be empty.')
+    const existing = definitionId === 'end' ? EndNode
+      : Object.hasOwn(this.registry, definitionId) ? this.registry[definitionId] : undefined
+    if (existing === NodeClass) return this as unknown as NodeRegistry<NodeDefs & { [P in K]: V }>
+    if (existing !== undefined) throw new Error(`Node definition ID "${definitionId}" is already registered.`)
+
+    const registeredId = NodeClass.definitionId
+    if (registeredId !== undefined && registeredId !== definitionId) {
+      throw new Error(`Node class "${NodeClass.name}" is already registered as "${registeredId}".`)
+    }
 
     const inputNameSet = new Set<string>()
     for (const input of NodeClass.definition.inputs) {
       if (inputNameSet.has(input.name)) {
-        // throw new Error(`Input name "${input.name}" is duplicated.`)
-        throw new Error(`Input name "${input.name}" is duplicated in node type "${nodeType}".`)
+        throw new Error(`Input name "${input.name}" is duplicated in node type "${definitionId}".`)
       }
       inputNameSet.add(input.name)
     }
     const outputNameSet = new Set<string>()
     for (const output of NodeClass.definition.outputs) {
       if (outputNameSet.has(output.name)) {
-        // throw new Error(`Output name "${output.name}" is duplicated.`)
-        throw new Error(`Output name "${output.name}" is duplicated in node type "${nodeType}".`)
+        throw new Error(`Output name "${output.name}" is duplicated in node type "${definitionId}".`)
       }
       outputNameSet.add(output.name)
     }
 
-    ;(this.registry as Record<string, unknown>)[nodeType] = NodeClass
-
     const desc = Object.getOwnPropertyDescriptor(NodeClass, 'type')
     if (!desc || desc.configurable) {
-        Object.defineProperty(NodeClass, 'type', {
-        get() {
-          return nodeType
-        },
-        configurable: false,
-        enumerable: true
-      })
+      Object.defineProperty(NodeClass, 'type', { value: definitionId, writable: false, configurable: false, enumerable: true })
     }
+    setRegisteredDefinitionId(NodeClass, definitionId)
+    Object.defineProperty(this.registry, definitionId, { value: NodeClass, enumerable: true })
     return this as unknown as NodeRegistry<NodeDefs & { [P in K]: V }>
+  }
+
+  getDefinition(definitionId: string): RegisteredNodeDefinition {
+    return resolveNodeDefinition(this.getNodeClass(definitionId))
   }
 
   get<T extends keyof NodeDefs>(nodeType: T): NodeDefs[T] {
     if (nodeType === 'end') return EndNode as unknown as NodeDefs[T]
-    if (!(nodeType in this.registry)) {
+    if (!Object.hasOwn(this.registry, nodeType)) {
       throw new Error(`Node type "${String(nodeType)}" is not registered.`)
     }
     return this.registry[nodeType] as NodeDefs[T] extends NodeClassType ? NodeDefs[T] : never
@@ -130,7 +158,7 @@ export class NodeRegistry<NodeDefs extends Record<string, unknown> = BuiltinNode
   /** Look up classes by type name at runtime without requiring registry generic narrowing. */
   getNodeClass(nodeType: string): NodeClassType {
     if (nodeType === 'end') return EndNode
-    if (!(nodeType in this.registry)) {
+    if (!Object.hasOwn(this.registry, nodeType)) {
       throw new Error(`Node type "${nodeType}" is not registered.`)
     }
     return (this.registry as Record<string, NodeClassType>)[nodeType]
@@ -147,7 +175,7 @@ export class NodeRegistry<NodeDefs extends Record<string, unknown> = BuiltinNode
   isRegistered<T extends keyof NodeDefs>(nodeType: T | NodeDefs[T]): boolean {
     if (nodeType === EndNode || nodeType === 'end') return true
     if (typeof nodeType === 'string') {
-      return nodeType in this.registry
+      return Object.hasOwn(this.registry, nodeType)
     }
 
     return Object.keys(this.registry).some((key) => this.registry[key as keyof NodeDefs] === nodeType)
@@ -161,6 +189,9 @@ export class NodeRegistry<NodeDefs extends Record<string, unknown> = BuiltinNode
     return EndNode
   }
 }
+
+/** Port body shapes. */
+export type PortShape = 'circle' | 'square' | 'diamond' | 'triangle' | 'hexagon' | 'bars' | 'arrow'
 
 export interface NodeStyle {
   background?: string
@@ -185,8 +216,25 @@ export interface NodeStyle {
       top?: number
       bottom?: number
     }
+    /**
+     * Port fill colour per data type id.
+     *
+     * Distinguishes port types at a glance, like colour-coded sockets. Falls
+     * back to `port.fill` for a type that is not listed.
+     */
+    colors?: Record<string, string>
+    /**
+     * Port body shape per data type id.
+     *
+     * Pairs with `colors` so a port kind stays recognisable without relying on
+     * colour alone. Execution ports default to `arrow` and every other type to
+     * `circle`.
+     */
+    shapes?: Record<string, PortShape>
     input?: {
       port?: {
+        /** Port dot radius in pixels; defaults to 6. */
+        r?: number
         fill?: string
         stroke?: string
         strokeWidth?: number
@@ -217,6 +265,8 @@ export interface NodeStyle {
     }
     output?: {
       port?: {
+        /** Port dot radius in pixels; defaults to 6. */
+        r?: number
         fill?: string
         stroke?: string
         strokeWidth?: number
@@ -237,7 +287,4 @@ export interface LinkStyle {
   strokeWidth?: number
   highlightStroke?: string
   highlightStrokeWidth?: number
-  byPortType?: {
-    [portType: string]: string[]
-  }
 }

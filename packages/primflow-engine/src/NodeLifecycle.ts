@@ -1,8 +1,8 @@
 import type { NodeCleanup, NodeEventHandler, NodeLifecycleContext } from '@lyx-pj/primflow-model'
-import type { NodeInstanceType } from './Runtime'
+import type { ExecutionNode } from './ExecutionNode'
 
 type Entry = {
-  node: NodeInstanceType
+  node: ExecutionNode
   context: NodeLifecycleContext
   active: boolean
   destroyed: boolean
@@ -18,12 +18,25 @@ export class NodeLifecycle {
   private reportError: (error: unknown, nodeId: string) => void
 
   constructor(
-    nodes: NodeInstanceType[],
-    createContext: (node: NodeInstanceType) => Omit<NodeLifecycleContext, 'onEvent' | 'onCleanup'>,
+    nodes: ExecutionNode[],
+    createContext: (node: ExecutionNode) => Omit<NodeLifecycleContext, 'on' | 'once' | 'onCleanup'>,
     reportError: (error: unknown, nodeId: string) => void
   ) {
     this.reportError = reportError
     this.entries = [...new Set(nodes)].map((node) => {
+      const on: NodeLifecycleContext['on'] = (name, handler) => {
+        if (node.inLoopBody) throw new Error(`Loop bodies cannot register session event subscriptions: ${node.id}`)
+        if (entry.context.signal.aborted) return () => {}
+        let handlers = entry.subscriptions.get(name)
+        if (!handlers) {
+          handlers = new Set()
+          entry.subscriptions.set(name, handlers)
+        }
+        handlers.add(handler)
+        return () => {
+          handlers.delete(handler)
+        }
+      }
       const entry: Entry = {
         node,
         active: false,
@@ -32,18 +45,13 @@ export class NodeLifecycle {
         cleanups: [],
         context: {
           ...createContext(node),
-          onEvent: (name, handler) => {
-            if (node.inLoopBody) throw new Error(`Loop bodies cannot register session event subscriptions: ${node.id}`)
-            if (entry.context.signal.aborted) return () => {}
-            let handlers = entry.subscriptions.get(name)
-            if (!handlers) {
-              handlers = new Set()
-              entry.subscriptions.set(name, handlers)
-            }
-            handlers.add(handler)
-            return () => {
-              handlers.delete(handler)
-            }
+          on,
+          once: (name, handler) => {
+            const unsubscribe = on(name, (ctx, ...payload) => {
+              unsubscribe()
+              return handler(ctx, ...payload)
+            })
+            return unsubscribe
           },
           onCleanup: (cleanup) => {
             if (entry.destroyed) {

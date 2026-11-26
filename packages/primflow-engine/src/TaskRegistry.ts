@@ -1,5 +1,6 @@
 import type { NodeClassType } from '@lyx-pj/primflow-model'
 import { ExecutionTask } from './ExecutionTask'
+import type { TaskTraceOptions } from './types'
 import type { TaskDefinition } from './types'
 
 /** Bounded task history; evict only finished tasks. */
@@ -8,8 +9,8 @@ export class TaskRegistry<NodeDefs extends Record<string, NodeClassType>> {
   private sequence = 0
   latestId?: string
 
-  create(definition: Omit<TaskDefinition, 'id'>, notify: (event: string, ...payload: unknown[]) => void) {
-    const task = new ExecutionTask<NodeDefs>({ ...definition, id: `task_${++this.sequence}` }, notify)
+  create(definition: Omit<TaskDefinition, 'id'>, trace: false | Required<TaskTraceOptions>, notify: (event: string, ...payload: unknown[]) => void) {
+    const task = new ExecutionTask<NodeDefs>({ ...definition, id: `task_${++this.sequence}` }, trace, notify)
     this.tasks.set(task.id, task)
     this.latestId = task.id
     return task

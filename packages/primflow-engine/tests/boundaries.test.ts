@@ -1,13 +1,14 @@
 //
-// engine reexports model's Node / NodeRegistry.
+// The engine reexports model's node factory and registry.
 // Duplicated implementations would create distinct runtime classes
 // and break object identity between engine and canvas.
 import { test, expect } from 'vitest'
-import { Node, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
-import { Node as EngineNode, NodeRegistry as EngineNodeRegistry } from '../src/index'
+import { defineNode, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
+import { defineNode as engineDefineNode, NodeRegistry as EngineNodeRegistry } from '../src/index'
 
-test('engine reexports the same Node / NodeRegistry classes as model', () => {
-  expect(EngineNode).toBe(Node)
+test('engine reexports the same node factory and registry as model', () => {
+  expect(engineDefineNode).toBeTypeOf('function')
+  expect(engineDefineNode).toBe(defineNode)
   expect(EngineNodeRegistry).toBe(NodeRegistry)
 })
 

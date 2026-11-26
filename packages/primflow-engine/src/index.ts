@@ -1,16 +1,18 @@
 export { Engine } from './Engine'
-export type { ProcessOptions, EngineStatus, BreakpointHit } from './Engine'
-export type { TaskSnapshot, TaskStatus, NodeExecutionData, LoopInvocationSnapshot, LoopIterationSnapshot } from './types'
+export type { EngineInitOptions, EngineOptions, EngineStatus, BreakpointHit, RetryOptions } from './types'
+export type { StateDefinition, StateField, StartOptions, TaskStateOptions, TaskStateCommit } from './types'
+export type { ActivationInputSource, NodeActivation, TaskTrace, TaskTraceEvent, TaskTraceOptions, WaitingInput } from './types'
+export type { NodeProgress, NodeAttempt, TaskSnapshot, TaskStatus, TaskInterrupt, NodeExecutionData, LoopInvocationSnapshot, LoopIterationSnapshot } from './types'
+export { RetryTimeoutError } from './RetryController'
 export { LoopExecutionError } from './LoopController'
-export { Runtime } from './Runtime'
-export type { ExecContext, ExecutorFn, EventFn, PortPrototype } from './Runtime'
+export type { ExecutionNode } from './ExecutionNode'
+export { defineExecutor, type ExecutorDefinition, type TypedExecutorContext } from './ExecutorDefinition'
+export { defineService, type ServiceDefinition, type ServiceValues } from './ServiceDefinition'
 
-// Reexport model definitions required by runtime consumers.
-// NodeInstanceType refers to model's NodeInstance, not Runtime's reduced implementation.
-// Keep node types consistent between engine and canvas consumers.
 export {
+  NodeExecutionError,
   NodeRegistry,
-  Node,
+  defineNode,
   VariableManager,
   ChangedEvent,
   ChangedEventType,
@@ -24,13 +26,27 @@ export type {
   LoopScope,
   NodeExecutionStatus,
   NodeEventHandler,
+  NodeEvent,
+  NodeEventContext,
+  NodeRetryPolicy,
+  NodeErrorOptions,
+  NodeFailure,
+  NodeRetryInfo,
   NodeCleanup,
   NodeLifecycleContext,
   NodeLifecycleHook,
   NodeClassType,
-  NodeInstanceType,
+  NodeValueOutput,
+  NodeExecutionContext,
+  ExecutorFn,
+  EventFn,
+  PortPrototype,
   NodeStyle,
   LinkStyle,
   JsonGraph,
   JsonLink,
+  JsonValue,
+  StateValues,
+  TaskState,
+  TaskStateSnapshot,
 } from '@lyx-pj/primflow-model'

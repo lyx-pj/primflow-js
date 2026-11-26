@@ -1,20 +1,32 @@
-import type { LoopScope, NodeClassType } from '@lyx-pj/primflow-model'
+import { isDataPort } from '@lyx-pj/primflow-model'
+import type { LoopScope, TaskStateSnapshot } from '@lyx-pj/primflow-model'
 import { createExecutionContext } from './ExecutionContext'
-import type { GraphCompiler, GraphNode } from './GraphCompiler'
-import type { Runtime, NodeInstanceType } from './Runtime'
+import { bindInput, describeInputSource, inputsReady, type ExecutionPath, type InputSelections } from './DataDependencies'
+import { graphPortKey, type GraphCompiler, type ExecutionPortEntry } from './GraphCompiler'
+import type { ExecutionNode } from './ExecutionNode'
+import type { NodeExecutor } from './NodeExecutor'
 import { applySubgraphEntryParams, applySubgraphExitParams } from './SubgraphParams'
-import type { LoopInvocationSnapshot, LoopIterationSnapshot, NodeExecutionData, ProcessOptions } from './types'
+import type { TaskStateActivation } from './TaskStateStore'
+import type { InterruptActivation } from './TaskInterrupts'
+import type { TaskTraceRecorder } from './TaskTrace'
+import type { ActivationInputSource, LoopInvocationSnapshot, LoopIterationSnapshot, NodeExecutionData, EngineOptions, WaitingInput } from './types'
 
 /** Iteration result: control flow and the single data result. */
 type ReturnValue = { control: string; value: unknown }
-type Activity = { pending?: number; running?: number; completed?: boolean }
+type Activity = { pending?: number; running?: number; outcome?: 'completed' | 'failed' }
 type Hooks = {
   taskId: string
+  progress: (nodeId: string, frameId: string, activationId?: number) => NonNullable<Parameters<typeof createExecutionContext>[1]['progress']>
+  trace?: TaskTraceRecorder
   signal: AbortSignal
-  wait: (node: NodeInstanceType, scope: { frameId: string; loop: LoopScope }, signal: AbortSignal) => Promise<boolean>
+  wait: (node: ExecutionNode, scope: { frameId: string; loop: LoopScope }, signal: AbortSignal, activationId?: number) => Promise<boolean>
   activity: (nodeId: string, delta: Activity) => void
+  skipped: (nodeId: string, activationId?: number) => void
+  interrupt: (node: ExecutionNode, scope: { frameId: string; loop: LoopScope }, signal: AbortSignal, isActive: () => boolean, activationId?: number) => InterruptActivation
   nodeState: (nodeId: string) => Record<string, unknown> | undefined
-  emit: (name: string, ...payload: unknown[]) => void
+  readState: () => TaskStateSnapshot
+  state: (nodeId: string, isActive: () => boolean, canUpdate: () => boolean, activationId?: number) => TaskStateActivation
+  emit: (activationId: number | undefined, name: string, ...payload: unknown[]) => void
   notify: (event: string, ...payload: unknown[]) => void
   runningTime: () => number
   paused: () => boolean
@@ -37,8 +49,8 @@ export class LoopExecutionError extends Error {
 }
 
 /** Clone execution data; definitions and lifecycle resources remain session-owned. */
-function cloneNode(initial: NodeInstanceType): NodeInstanceType {
-  const node = Object.create(Object.getPrototypeOf(initial)) as NodeInstanceType
+function cloneNode(initial: ExecutionNode): ExecutionNode {
+  const node = Object.create(Object.getPrototypeOf(initial)) as ExecutionNode
   Object.defineProperties(node, Object.getOwnPropertyDescriptors(initial))
   node.inputs = structuredClone(initial.inputs)
   node.outputs = structuredClone(initial.outputs)
@@ -74,22 +86,30 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** Iteration policy and result commitment; IterationFrame handles individual scheduling. */
-export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
+export class LoopController {
   readonly invocations = new Map<string, LoopInvocationSnapshot>()
   readonly iterations = new Map<string, LoopIterationSnapshot>()
   readonly frameData = new Map<string, Map<string, NodeExecutionData>>()
   readonly latestData = new Map<string, NodeExecutionData>()
   private sequence = 0
   private activations = 0
-  private initial = new Map<string, NodeInstanceType>()
+  private initial = new Map<string, ExecutionNode>()
   readonly limits: { iterations: number; activations: number; depth: number; history: number }
 
-  readonly runtime: Runtime<NodeDefs>
+  readonly nodesById: ReadonlyMap<string, ExecutionNode>
+  readonly nodeExecutor: NodeExecutor
   readonly compiled: GraphCompiler
-  readonly options: ProcessOptions
+  readonly options: EngineOptions
   readonly hooks: Hooks
-  constructor(runtime: Runtime<NodeDefs>, compiled: GraphCompiler, options: ProcessOptions, hooks: Hooks) {
-    this.runtime = runtime
+  constructor(
+    nodesById: ReadonlyMap<string, ExecutionNode>,
+    nodeExecutor: NodeExecutor,
+    compiled: GraphCompiler,
+    options: EngineOptions,
+    hooks: Hooks
+  ) {
+    this.nodesById = nodesById
+    this.nodeExecutor = nodeExecutor
     this.compiled = compiled
     this.options = options
     this.hooks = hooks
@@ -103,7 +123,7 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
       if (!Number.isSafeInteger(value) || value < (name === 'history' ? 0 : 1))
         throw new RangeError(`Invalid loop limit ${name}`)
     }
-    for (const node of runtime.nodes.values()) this.initial.set(node.id, cloneNode(node))
+    for (const node of nodesById.values()) this.initial.set(node.id, cloneNode(node))
   }
 
   activate(nodeId: string, frameId?: string, loop?: LoopScope) {
@@ -112,28 +132,28 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
   }
 
   createNodes(graphId: string) {
-    const nodes = new Map<string, NodeInstanceType>()
+    const nodes = new Map<string, ExecutionNode>()
     for (const item of this.compiled.graphs.get(graphId)!.values()) {
       if (!nodes.has(item.node.id)) {
         const node = cloneNode(this.initial.get(item.node.id)!)
-        node.breakpoint = this.runtime.nodes.get(node.id)!.breakpoint
+        node.breakpoint = this.nodesById.get(node.id)!.breakpoint
         nodes.set(node.id, node)
       }
     }
     return nodes
   }
 
-  createInvocationNode(node: NodeInstanceType) {
+  createInvocationNode(node: ExecutionNode) {
     return cloneNode(node)
   }
 
-  record(frameId: string | undefined, node: NodeInstanceType) {
+  record(frameId: string | undefined, node: ExecutionNode) {
     const data = structuredClone({
       inputs: Object.fromEntries(
-        node.inputs.filter((p) => !['exec', 'spacer'].includes(p.type)).map((p) => [p.name, node.getInput(p.name)])
+        node.inputs.filter((p) => isDataPort(p.type)).map((p) => [p.name, node.getInput(p.name)])
       ),
       outputs: Object.fromEntries(
-        node.outputs.filter((p) => !['exec', 'spacer'].includes(p.type)).map((p) => [p.name, node.getOutput(p.name)])
+        node.outputs.filter((p) => isDataPort(p.type)).map((p) => [p.name, node.getOutput(p.name)])
       ),
     })
     if (frameId) this.frameData.get(frameId)!.set(node.id, data)
@@ -149,16 +169,18 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
   }
 
   async run(
-    node: NodeInstanceType,
+    node: ExecutionNode,
     parentSignal = this.hooks.signal,
     parentFrameId?: string,
     depth = 1,
-    applicationContext = this.options.ctx
+    applicationContext = this.options.context,
+    activationId?: number,
   ) {
     const config = node.loop!
     const invocationId = `${this.hooks.taskId}:loop:${++this.sequence}`
     const summary: LoopInvocationSnapshot = {
       invocationId,
+      ...(activationId !== undefined && { activationId }),
       loopNodeId: node.id,
       parentFrameId,
       status: 'running',
@@ -172,13 +194,24 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
     const started = this.hooks.runningTime()
     let activeFrame: LoopIterationSnapshot | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = () => {
+    const expireIfNeeded = () => {
       const remaining = config.timeoutMs! - (this.hooks.runningTime() - started)
       if (remaining <= 0 && !this.hooks.paused())
         controller.abort(new LoopExecutionError('LoopTimeout', node.id, activeFrame?.frameId, activeFrame?.loop))
-      else timer = setTimeout(timeout, Math.max(1, Math.min(remaining > 0 ? remaining : 10, 50)))
+      return remaining
+    }
+    const timeout = () => {
+      const remaining = expireIfNeeded()
+      if (!controller.signal.aborted)
+        timer = setTimeout(timeout, Math.max(1, Math.min(remaining > 0 ? remaining : 10, 50)))
+    }
+    const assertRunning = () => {
+      // Synchronous work can delay the timeout timer until after the return barrier.
+      if (config.timeoutMs !== undefined && !controller.signal.aborted) expireIfNeeded()
+      if (controller.signal.aborted) throw abortReason(controller.signal)
     }
     if (config.timeoutMs) timeout()
+    this.hooks.trace?.loop(summary)
     this.hooks.notify('loop:started', structuredClone(summary))
     // Completion reason: break when the body ends; limit when the iteration cap is reached.
     let reason: LoopInvocationSnapshot['reason'] | undefined
@@ -190,31 +223,35 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
         throw new LoopExecutionError('LoopLimitExceeded: Configuration exceeds engine limit', node.id, parentFrameId)
       const context = structuredClone(applicationContext ?? {})
       // Pass entry values between iterations: initial loop input, then the previous submitted value.
-      let carry = structuredClone(node.getInput('input'))
+      const initialValue = structuredClone(node.getInput('input'))
+      let carry = initialValue
       let last: unknown
       for (let index = 0; index < limit; index++) {
-        if (controller.signal.aborted) throw abortReason(controller.signal)
         // Yield via macrotasks so synchronous loops respond to stop, timeouts, and other tasks.
         if (index % 16 === 0) await abortable(new Promise<void>((resolve) => setTimeout(resolve, 0)), controller.signal)
+        assertRunning()
         const frameId = `${this.hooks.taskId}:frame:${++this.sequence}`
         const loop: LoopScope = { invocationId, loopNodeId: node.id, index, parentFrameId }
-        const frameInfo: LoopIterationSnapshot = { frameId, graphId: node.subgraphId!, loop, status: 'running' }
+        const frameInfo: LoopIterationSnapshot = { frameId, graphId: node.targetGraphId!, loop, status: 'running' }
         activeFrame = frameInfo
         this.iterations.set(frameId, frameInfo)
         this.frameData.set(frameId, new Map())
         const frame = new IterationFrame(
           this,
-          node.subgraphId!,
+          node.targetGraphId!,
           frameId,
           loop,
           controller.signal,
           depth,
           structuredClone(context),
-          carry
+          carry,
+          activationId,
         )
+        this.hooks.trace?.frame(frameInfo)
         this.hooks.notify('loop:iteration:started', structuredClone(frameInfo))
         try {
-          const returned = await frame.run(carry)
+          const returned = await frame.run(carry, initialValue)
+          assertRunning()
           last = structuredClone(returned!.value)
           // The submitted value becomes the next iteration's entry value.
           carry = last
@@ -224,6 +261,7 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
           frameInfo.status = 'completed'
           frameInfo.state = structuredClone(carry)
           frameInfo.result = structuredClone(last)
+          this.hooks.trace?.frame(frameInfo)
           this.hooks.notify('loop:iteration:completed', structuredClone(frameInfo))
           // The body decides whether to stop or continue.
           if (returned!.control === 'break') {
@@ -246,14 +284,15 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
           throw error
         } finally {
           frame.close()
+          if (frameInfo.status !== 'completed') this.hooks.trace?.frame(frameInfo)
           activeFrame = undefined
           this.prune()
         }
       }
-      if (controller.signal.aborted) throw abortReason(controller.signal)
       // Expose complete output to the parent only after the invocation succeeds.
       // The sole output is the final submitted iteration value.
       const output = structuredClone(last)
+      assertRunning()
       node.setOutput('output', output)
       summary.status = 'completed'
       summary.reason = reason ?? 'break'
@@ -268,16 +307,25 @@ export class LoopController<NodeDefs extends Record<string, NodeClassType>> {
       controller.abort()
       parentSignal.removeEventListener('abort', cancel)
       if (timer !== undefined) clearTimeout(timer)
+      this.hooks.trace?.loop(summary)
       this.hooks.notify('loop:finished', structuredClone(summary))
     }
   }
 }
 
+type WaitingFrameEntry = {
+  item: ExecutionPortEntry
+  activationId?: number
+  path?: ExecutionPath
+  selections?: InputSelections
+}
+
 /** Create fresh node values, ready/waiting state, and activation records; subgraphs inherit the frame boundary. */
-class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
-  private nodes: Map<string, NodeInstanceType>
+class IterationFrame {
+  private nodes: Map<string, ExecutionNode>
   private ready = new Map<string, Record<string, unknown>>()
-  private waiting = new Map<string, GraphNode>()
+  private producers = new Map<string, number>()
+  private waiting = new Map<string, WaitingFrameEntry>()
   private activated = new Set<string>()
   private tasks = new Set<Promise<void>>()
   private returned?: ReturnValue
@@ -286,32 +334,35 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
   private open = true
   private cancel: () => void
 
-  private owner: LoopController<NodeDefs>
+  private owner: LoopController
   private graphId: string
   private frameId: string
   private loop: LoopScope
   private depth: number
-  private ctx: unknown
+  private applicationContext: unknown
   /** Current entry value, used when the return data port is unconnected. */
   private entryValue: unknown
+  private parentActivationId?: number
   constructor(
-    owner: LoopController<NodeDefs>,
+    owner: LoopController,
     graphId: string,
     frameId: string,
     loop: LoopScope,
     signal: AbortSignal,
     depth: number,
-    ctx: unknown,
+    applicationContext: unknown,
     entryValue: unknown,
-    activated?: Set<string>
+    parentActivationId?: number,
+    activated?: Set<string>,
   ) {
     this.owner = owner
     this.graphId = graphId
     this.frameId = frameId
     this.loop = loop
     this.depth = depth
-    this.ctx = ctx
+    this.applicationContext = applicationContext
     this.entryValue = entryValue
+    this.parentActivationId = parentActivationId
     if (activated) this.activated = activated
     this.nodes = owner.createNodes(graphId)
     this.cancel = () => this.controller.abort(abortReason(signal))
@@ -334,7 +385,10 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
     this.controller.abort(error)
   }
   close() {
-    for (const item of this.waiting.values()) this.owner.hooks.activity(item.node.id, { pending: -1 })
+    for (const { item, activationId } of this.waiting.values()) {
+      this.owner.hooks.trace?.finish(activationId, 'cancelled')
+      this.owner.hooks.activity(item.node.id, { pending: -1 })
+    }
     this.waiting.clear()
     this.open = false
     this.controller.abort()
@@ -351,13 +405,13 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
     )
     return work
   }
-  private graphNode(key: string): GraphNode {
+  private graphNode(key: string): ExecutionPortEntry {
     const original = this.owner.compiled.graphs.get(this.graphId)!.get(key)!
     return { ...original, node: this.nodes.get(original.node.id)! }
   }
 
   /** Region entry: start for ordinary subgraphs, loop-entry for bodies. */
-  private entryNode(): NodeInstanceType | undefined {
+  private entryNode(): ExecutionNode | undefined {
     for (const key of this.owner.compiled.entries.get(this.graphId) ?? []) {
       return this.graphNode(key).node
     }
@@ -366,26 +420,26 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
 
   /** Identify loop bodies by loop-entry; ordinary subgraphs enter through start and return through end. */
   private isLoopBody() {
-    return this.entryNode()?.type === 'loop-entry'
+    return this.entryNode()?.kind === 'loop-entry'
   }
 
   /** Region exit: the end node in an ordinary subgraph. */
-  private exitNode(): NodeInstanceType | undefined {
+  private exitNode(): ExecutionNode | undefined {
     for (const item of this.owner.compiled.graphs.get(this.graphId)?.values() ?? []) {
-      if (item.node.type !== 'end') continue
+      if (item.node.kind !== 'end') continue
       return this.nodes.get(item.node.id) ?? item.node
     }
     return undefined
   }
-  private async wait(node: NodeInstanceType) {
+  private async wait(node: ExecutionNode, activationId?: number) {
     if (!this.active()) throw abortReason(this.signal)
     if (this.activated.size > 0 && this.activated.size % 64 === 0) {
       await abortable(new Promise<void>((resolve) => setTimeout(resolve, 0)), this.signal)
     }
-    const definition = this.owner.runtime.nodes.get(node.id)!
+    const definition = this.owner.nodesById.get(node.id)!
     node.breakpoint = definition.breakpoint
     const runnable = await abortable(
-      this.owner.hooks.wait(node, { frameId: this.frameId, loop: this.loop }, this.signal),
+      this.owner.hooks.wait(node, { frameId: this.frameId, loop: this.loop }, this.signal, activationId),
       this.signal
     )
     if (!runnable || !this.active()) throw abortReason(this.signal)
@@ -393,24 +447,32 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
   /**
    * Execute this frame.
    *
-   * entry is the arbitrary loop entry value; ordinary subgraph frames have no entry value.
+   * Ordinary subgraph frames use neither the current nor the initial loop entry value.
    */
-  async run(entry?: unknown): Promise<ReturnValue | undefined> {
+  async run(entry?: unknown, initialValue?: unknown): Promise<ReturnValue | undefined> {
     try {
       for (const key of this.owner.compiled.entries.get(this.graphId) ?? []) {
-        const { node } = this.graphNode(key)
+        const { node, port } = this.graphNode(key)
         if (this.activated.has(node.id)) throw this.error('LoopNodeMultipleActivations', node.id)
         this.activated.add(node.id)
-        this.owner.activate(node.id, this.frameId, this.loop)
+        const trace = this.owner.hooks.trace
+        const activationId = trace?.begin(node, port.id, {
+          kind: 'entry', frameId: this.frameId, parentActivationId: this.parentActivationId,
+        })
         this.owner.hooks.activity(node.id, { pending: 1 })
         try {
-          await this.wait(node)
-          // Forward the current entry value to downstream nodes without restricting its type.
-          if (node.type === 'loop-entry') node.outputValues = { value: structuredClone(entry) }
+          this.owner.activate(node.id, this.frameId, this.loop)
+          await this.wait(node, activationId)
+          trace?.start(activationId)
+          if (node.kind === 'loop-entry') {
+            node.outputValues = { value: structuredClone(entry), initialValue: structuredClone(initialValue) }
+          }
           this.owner.record(this.frameId, node)
-          this.owner.hooks.activity(node.id, { pending: -1, completed: true })
-          this.track(this.publish(node))
+          trace?.finish(activationId, 'completed', node)
+          this.owner.hooks.activity(node.id, { pending: -1, outcome: 'completed' })
+          this.track(this.publish(node, undefined, undefined, activationId))
         } catch (error) {
+          trace?.finish(activationId, this.active() ? 'failed' : 'cancelled', node, error)
           this.owner.hooks.activity(node.id, { pending: -1 })
           throw error
         }
@@ -418,7 +480,12 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
       while (this.tasks.size) await abortable(Promise.all([...this.tasks]), this.signal)
       if (this.failure) throw this.failure
       if (!this.active()) throw abortReason(this.signal)
-      if (this.waiting.size) throw this.error('LoopDependencyUnresolved', this.waiting.values().next().value!.node.id)
+      if (this.waiting.size) {
+        const { item, activationId } = this.waiting.values().next().value!
+        const error = this.error('LoopDependencyUnresolved', item.node.id)
+        this.owner.hooks.trace?.finish(activationId, 'failed', undefined, error)
+        throw error
+      }
       // Bodies must return; entry can be undefined and cannot indicate whether execution occurred.
       if (this.isLoopBody() && !this.returned) throw this.error('LoopBodyNotReturned', this.loop.loopNodeId)
       return this.returned
@@ -430,10 +497,15 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
     }
   }
 
-  private dependencies(item: GraphNode) {
-    return Object.values(item.dataInputs).every((dep) => this.ready.has(dep.split(':')[0]))
+  private dependencies({ item, path, selections, activationId }: WaitingFrameEntry) {
+    const trace = this.owner.hooks.trace
+    const missing: WaitingInput[] | undefined = trace ? [] : undefined
+    const ready = inputsReady(item, (id) => this.ready.has(id), this.ready, path, selections, missing, this.producers)
+    if (missing) trace?.waiting(activationId, missing)
+    return ready
   }
-  private enter(key: string) {
+
+  private enter(key: string, path?: ExecutionPath, parentActivationId?: number) {
     if (!this.active()) return Promise.resolve()
     const item = this.graphNode(key)
     if (this.activated.has(item.node.id)) {
@@ -442,21 +514,41 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
       return Promise.reject(error)
     }
     this.activated.add(item.node.id)
-    this.owner.activate(item.node.id, this.frameId, this.loop)
+    const trace = this.owner.hooks.trace
+    const activationId = trace?.begin(item.node, item.port.id, {
+      kind: 'node', frameId: this.frameId, parentActivationId,
+    })
+    try {
+      this.owner.activate(item.node.id, this.frameId, this.loop)
+    } catch (error) {
+      trace?.finish(activationId, 'failed', undefined, error)
+      throw error
+    }
     this.owner.hooks.activity(item.node.id, { pending: 1 })
-    if (!this.dependencies(item)) {
-      this.waiting.set(key, item)
+    const entry = { item, path, activationId, selections: item.hasMultipleSources ? new Map() : undefined }
+    if (!this.dependencies(entry)) {
+      this.waiting.set(key, entry)
       return Promise.resolve()
     }
-    return this.execute(item)
+    return this.execute(entry)
   }
-  private async publish(node: NodeInstanceType, nextExecs?: string[]) {
+  private async publish(node: ExecutionNode, nextExecs?: string[], path?: ExecutionPath, activationId?: number) {
     if (!this.active()) return
-    this.ready.set(node.id, structuredClone(node.outputValues))
-    const next = node.outputs
-      .filter((p) => p.type === 'exec' && (!nextExecs?.length || nextExecs.includes(p.name)))
-      .flatMap((p) => this.graphNode(`${node.id}:${p.id}`).next)
-    const work = next.map((key) => this.enter(key))
+    const values = structuredClone(node.outputValues)
+    this.ready.set(node.id, values)
+    if (activationId !== undefined) this.producers.set(node.id, activationId)
+    const nextPath = this.owner.compiled.selectionSources.has(node.id) ? { nodeId: node.id, values, activationId, previous: path } : path
+    const ports = node.outputs.filter((p) => p.type === 'exec' && (!nextExecs?.length || nextExecs.includes(p.name)))
+    if (activationId !== undefined) this.owner.hooks.trace?.record({
+      type: 'activation:handoff', activationId, ports: ports.map(({ name }) => name),
+    })
+    const next = ports.flatMap((p) => this.graphNode(graphPortKey(node.id, p.id)).next)
+    if (nextExecs?.length) {
+      const entryIds = new Set((this.owner.compiled.entries.get(this.graphId) ?? []).map((key) => this.graphNode(key).node.id))
+      const roots = new Map([[this.graphId, entryIds]])
+      for (const id of this.owner.compiled.unselectedNodes(node, nextExecs, roots)) this.owner.hooks.skipped(id, activationId)
+    }
+    const work = next.map((key) => this.enter(key, nextPath, activationId))
     for (const [key, item] of this.waiting)
       if (this.dependencies(item)) {
         this.waiting.delete(key)
@@ -465,8 +557,9 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
     await Promise.all(work)
   }
 
-  private async execute(item: GraphNode) {
+  private async execute({ item, path, selections, activationId }: WaitingFrameEntry) {
     const { node } = item
+    const trace = this.owner.hooks.trace
     let phase: 'pending' | 'running' | undefined = 'pending'
     let alive = true
     let handed = false
@@ -474,22 +567,34 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
       if (!phase) return
       const completedPhase = phase
       this.owner.record(this.frameId, node)
+      trace?.finish(activationId, 'completed', node)
       phase = undefined
-      this.owner.hooks.activity(node.id, { [completedPhase]: -1, completed: true })
+      this.owner.hooks.activity(node.id, { [completedPhase]: -1, outcome: 'completed' })
     }
     try {
-      for (const [target, source] of Object.entries(item.dataInputs)) {
-        const [sourceId, portId] = source.split(':')
-        const sourceNode = this.nodes.get(sourceId)!
-        const name = sourceNode.outputs.find((p) => p.id === portId)!.name
+      let snapshot: TaskStateSnapshot | undefined
+      const readState = () => (snapshot ??= this.owner.hooks.readState())
+      const inputSources: ActivationInputSource[] = []
+      for (const [target, candidates] of Object.entries(item.dataInputs)) {
         const input = node.inputs.find((p) => p.id === target)!
         // Preserve connected undefined and provide independent copies to consumers.
-        node.inputValues[input.name] = structuredClone(this.ready.get(sourceId)![name])
+        const selection = selections?.get(target)
+        const { source, read } = bindInput(candidates, (id, name) => this.ready.get(id)![name], selection)
+        const state = source.stateSource ? readState() : undefined
+        if (activationId !== undefined) {
+          inputSources.push(describeInputSource(target, source, state?.version,
+            selection ? selection.activationId : this.producers.get(source.dependency ?? '')))
+          trace?.inputs(activationId, inputSources)
+        }
+        const value = read(state)
+        node.inputValues[input.name] = structuredClone(value)
       }
-      await this.wait(node)
+      await this.wait(node, activationId)
+      trace?.start(activationId)
       this.owner.hooks.activity(node.id, { pending: -1, running: 1 })
       phase = 'running'
-      if (node.type === 'loop-return') {
+      if (!this.active()) throw abortReason(this.signal)
+      if (node.kind === 'loop-return') {
         if (this.returned) throw this.error('LoopBodyMultipleReturns', node.id)
         // Only next and break control signals are allowed.
         if (!['next', 'break'].includes(item.port.name)) throw this.error('LoopReturnInvalid', node.id)
@@ -501,23 +606,24 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
         complete()
         return
       }
-      if (node.type === 'loop') {
-        await this.owner.run(node, this.signal, this.frameId, this.depth + 1, this.ctx)
+      if (node.kind === 'loop') {
+        await this.owner.run(node, this.signal, this.frameId, this.depth + 1, this.applicationContext, activationId)
         complete()
-        await this.publish(node, ['done'])
+        await this.publish(node, ['done'], path, activationId)
         return
       }
-      if (node.type === 'subgraph') {
+      if (node.kind === 'subgraph') {
         const child = new IterationFrame(
           this.owner,
-          node.subgraphId!,
+          node.targetGraphId!,
           this.frameId,
           this.loop,
           this.signal,
           this.depth,
-          this.ctx,
+          this.applicationContext,
           this.entryValue,
-          this.activated
+          activationId,
+          this.activated,
         )
         // Map parent call inputs by name to subgraph entry parameters.
         const entry = child.entryNode()
@@ -526,24 +632,35 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
         // Write subgraph exit parameters to parent call outputs.
         applySubgraphExitParams(node, child.exitNode())
         complete()
-        await this.publish(node)
+        await this.publish(node, undefined, path, activationId)
         return
       }
-      if (node.type === 'end') {
+      if (node.kind === 'end') {
         complete()
         return
       }
-      const context = createExecutionContext(node, {
-        taskId: this.owner.hooks.taskId,
-        signal: this.signal,
-        ctx: this.ctx,
-        nodeState: this.owner.hooks.nodeState(node.id),
-        isActive: () => this.active() && alive && !handed,
-        getService: (name) => this.owner.runtime.getService(name),
-        emit: this.owner.hooks.emit,
-      })
-      context.frameId = this.frameId
-      context.loop = Object.freeze({ ...this.loop })
+      const canUpdate = () => this.active() && alive && !handed
+      const state = this.owner.hooks.state(node.id, () => this.active(), canUpdate, activationId)
+      const interrupts = this.owner.hooks.interrupt(node, { frameId: this.frameId, loop: this.loop }, this.signal, canUpdate, activationId)
+      const context = {
+        ...createExecutionContext(node, {
+          taskId: this.owner.hooks.taskId,
+          signal: this.signal,
+          context: this.applicationContext,
+          nodeState: this.owner.hooks.nodeState(node.id),
+          isActive: canUpdate,
+          progress: this.owner.hooks.progress(node.id, this.frameId, activationId),
+          services: this.owner.nodeExecutor.services,
+          emit: (name, ...payload) => {
+            if (activationId !== undefined) trace?.record({ type: 'activation:emit', activationId, eventName: name })
+            this.owner.hooks.emit(activationId, name, ...payload)
+          },
+        }),
+        state: state.state,
+        interrupt: interrupts.request,
+        frameId: this.frameId,
+        loop: Object.freeze({ ...this.loop }),
+      }
       context.next = (next) => {
         if (!alive || !this.active()) return Promise.resolve()
         if (handed) {
@@ -553,23 +670,30 @@ class IterationFrame<NodeDefs extends Record<string, NodeClassType>> {
           void rejected.catch(() => {})
           return rejected
         }
+        state.commit()
         handed = true
+        interrupts.close()
         complete()
-        return this.track(this.publish(node, next))
+        return this.track(this.publish(node, next, path, activationId))
       }
       try {
         await abortable(
-          this.owner.runtime.executeNode(node, context, () => {
+          this.owner.nodeExecutor.executeNode(node, context, () => {
             alive = false
           }),
           this.signal
         )
+        state.commit()
       } finally {
         alive = false
+        interrupts.close()
+        state.discard()
       }
       if (this.active()) complete()
     } catch (error) {
       const scoped = error instanceof LoopExecutionError ? error : this.error(String(error), node.id, error)
+      trace?.finish(activationId, this.signal.aborted ? 'cancelled' : 'failed', node, scoped)
+      if (!this.signal.aborted) this.owner.hooks.activity(node.id, { outcome: 'failed' })
       this.fail(scoped)
       throw scoped
     } finally {

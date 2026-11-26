@@ -9,7 +9,7 @@ This document describes loop ports, configuration, and body structure. See [engi
 | Node | Type name | Inputs | Outputs |
 | --- | --- | --- | --- |
 | `Loop` | `loop` | Execution `exec`, data `input` | Execution `done`, data `output` |
-| `LoopEntry` | `loop-entry` | None | Execution `exec`, data `value` |
+| `LoopEntry` | `loop-entry` | None | Execution `exec`, data `value` and `initialValue` |
 | `LoopReturn` | `loop-return` | Data `value`, execution `next` / `break` | None |
 
 Port IDs use the `in-` / `out-` prefixes, such as `in-input` and `out-value`. Definitions are in [Loop.ts](../src/builtin/nodes/Loop.ts). A loop exposes one execution input and one data input. Iteration numbers and completion reasons are internal engine information, not ports.
@@ -17,7 +17,8 @@ Port IDs use the `in-` / `out-` prefixes, such as `in-input` and `out-value`. De
 Loops have one form: the body runs repeatedly and decides when to stop. Nodes inside the body implement collection traversal, counting, and other uses; the engine does not distinguish modes.
 
 - `Loop.input` supplies the first iteration's entry value. Later iterations receive the value submitted by the previous return node.
-- `LoopEntry.value` is the current iteration's entry value. `LoopReturn.value` is its submitted value and becomes the next iteration's entry value.
+- `LoopEntry.initialValue` copies `Loop.input` at the start of the invocation and provides the same initial value on every iteration.
+- `LoopEntry.value` is the current iteration's entry value. It starts at `Loop.input` and receives the result submitted through `LoopReturn.next` on later iterations.
 - `LoopReturn.next` submits the current iteration and continues; `break` submits it and ends the loop.
 - `Loop.output` is the result of a successful loop: the last submitted iteration value.
 
@@ -39,7 +40,7 @@ New nodes use `DEFAULT_LOOP_CONFIG = { version: 1 }`, written by the canvas and 
 
 ## Loop body structure
 
-The body lives in `JsonGraph.subgraphs[subgraphId]`, referenced by `Loop.subgraphId`. It is saved with its owning graph, not as a separate file. The JSON must satisfy these rules:
+The body lives in `JsonGraph.subgraphs[targetGraphId]`, referenced by `Loop.targetGraphId`. It is saved with its owning graph, not as a separate file. The JSON must satisfy these rules:
 
 - Exactly one `loop-entry` and at least one `loop-return`.
 - No ordinary `start` / `end` nodes.

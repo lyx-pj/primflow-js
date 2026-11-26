@@ -9,7 +9,7 @@
 | 节点 | 类型名 | 输入 | 输出 |
 | --- | --- | --- | --- |
 | `Loop` | `loop` | 执行 `exec`、数据 `input` | 执行 `done`、数据 `output` |
-| `LoopEntry` | `loop-entry` | 无 | 执行 `exec`、数据 `value` |
+| `LoopEntry` | `loop-entry` | 无 | 执行 `exec`、数据 `value` 和 `initialValue` |
 | `LoopReturn` | `loop-return` | 数据 `value`、执行 `next` / `break` | 无 |
 
 端口 ID 使用 `in-` / `out-` 前缀（如 `in-input`、`out-value`），定义见 [Loop.ts](../src/builtin/nodes/Loop.ts)。循环对外只有一个执行入口和一个数据入口；轮次、结束原因是引擎内部信息，不占用端口。
@@ -17,7 +17,8 @@
 循环只有一种形态：循环体反复执行，什么时候结束由循环体自己决定；遍历、计数等具体玩法由循环体里的节点实现，引擎不区分模式。
 
 - `Loop.input` 提供首轮入口值；之后每轮的入口值由上一轮返回节点提交。
-- `LoopEntry.value` 是本轮入口值；`LoopReturn.value` 是本轮提交值，同时成为下一轮的入口值。
+- `LoopEntry.initialValue` 在调用开始时复制 `Loop.input`，每轮都提供同一个初始值。
+- `LoopEntry.value` 是本轮迭代值。第一轮使用 `Loop.input`，后续轮次使用上一轮通过 `LoopReturn.next` 提交的结果。
 - `LoopReturn.next` 提交本轮并继续，`break` 提交本轮并结束。
 - `Loop.output` 是整个循环成功后的结果，即最后一轮提交的值。
 
@@ -39,7 +40,7 @@ type LoopConfig = {
 
 ## 循环体结构
 
-循环体存放在 `JsonGraph.subgraphs[subgraphId]`，`Loop.subgraphId` 指向它。循环体随所属图保存，不单独成为文件。JSON 必须满足：
+循环体存放在 `JsonGraph.subgraphs[targetGraphId]`，`Loop.targetGraphId` 指向它。循环体随所属图保存，不单独成为文件。JSON 必须满足：
 
 - 恰好一个 `loop-entry`，至少一个 `loop-return`。
 - 不能放普通 `start` / `end`。

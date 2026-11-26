@@ -1,45 +1,98 @@
+import { validateGraphTypes } from '@lyx-pj/primflow-model'
 import {
   EventEmitter,
   type JsonGraph,
+  type JsonValue,
   type NodeClassType,
   type NodeOptions,
+  type NodeRegistry,
   type NodeExecutionStatus,
 } from '@lyx-pj/primflow-model'
-import { Runtime, type NodeInstanceType } from './Runtime'
+import type { ExecutionNode } from './ExecutionNode'
+import { createExecutionNode, loadGraphNodes } from './GraphLoader'
+import { NodeExecutor } from './NodeExecutor'
 import { NodeLifecycle } from './NodeLifecycle'
 import { GraphCompiler } from './GraphCompiler'
 import { TaskScheduler } from './TaskScheduler'
 import { TaskRegistry } from './TaskRegistry'
+import { resolveRetryTiming, type RetryTiming } from './RetryController'
 import { createExecutionContext } from './ExecutionContext'
-import type { BreakpointHit, EngineEventPayloads, EngineStatus, ProcessOptions, TaskSnapshot } from './types'
+import { TaskStateStore } from './TaskStateStore'
+import { resolveTraceOptions } from './TaskTrace'
+import type { ExecutorDefinition } from './ExecutorDefinition'
+import { resolveServices, type ServiceDefinition } from './ServiceDefinition'
+import type {
+  BreakpointHit, EngineEventPayloads, EngineStatus, EngineInitOptions, EngineOptions, StartOptions,
+  TaskSnapshot, TaskStateCommit, TaskStateOptions,
+} from './types'
 
-export type { ExecContext } from '@lyx-pj/primflow-model'
-export type { EngineStatus, ProcessOptions, BreakpointHit } from './types'
-
-type Session = {
+type WorkflowSession = {
   controller: AbortController
   lifecycle?: NodeLifecycle
   ready: Promise<void>
   initialized: () => void
   debug: boolean
+  retry: RetryTiming
+}
+
+class EngineEvents extends EventEmitter<EngineEventPayloads> {
+  protected handleListenerError(error: unknown) {
+    console.error('Engine event observer failed', error)
+  }
 }
 
 /** Workflow session entry. Sessions own lifecycle resources; tasks own execution data. */
-export class Engine<NodeDefs extends Record<string, NodeClassType>> extends EventEmitter<EngineEventPayloads> {
-  runtime: Runtime<NodeDefs>
-  options: ProcessOptions
+export class Engine<NodeDefs extends Record<string, NodeClassType>> {
+  private readonly events = new EngineEvents()
+  private readonly nodeExecutor: NodeExecutor
+  private readonly registry: NodeRegistry<NodeDefs>
+  private readonly serviceDefinitions: ReadonlySet<ServiceDefinition>
+  options: EngineOptions
   private definition?: JsonGraph
-  private loadedNodes: NodeInstanceType[] = []
-  private session?: Session
+  private loadedNodes: ExecutionNode[] = []
+  private session?: WorkflowSession
   private stopping?: Promise<void>
   private tasks = new TaskRegistry<NodeDefs>()
   private currentStatus: EngineStatus = 'idle'
 
-  constructor(runtime: Runtime<NodeDefs>, options: ProcessOptions = {}) {
-    super()
-    this.runtime = runtime
+  constructor(registry: NodeRegistry<NodeDefs>, options: EngineInitOptions = {}) {
+    this.registry = registry
     this.options = options
     this.historyLimit()
+    resolveRetryTiming(options.retry)
+    resolveTraceOptions(options.trace)
+    const services = options.services ?? []
+    this.serviceDefinitions = new Set(services)
+    this.nodeExecutor = new NodeExecutor(resolveServices(services))
+  }
+
+  /** Register an executor after its declared services have been installed. */
+  registerExecutor(executor: ExecutorDefinition) {
+    if (typeof executor?.name !== 'string' || !executor.name.trim() || typeof executor.execute !== 'function') {
+      throw new TypeError('Expected an executor definition with a name and an execute function.')
+    }
+    for (const service of executor.services ?? []) {
+      if (!this.serviceDefinitions.has(service)) {
+        throw new Error(`Executor "${executor.name}" requires service "${service.name}".`)
+      }
+    }
+    this.nodeExecutor.registerExecutor(executor.name, executor.execute)
+    return this
+  }
+
+  on<K extends keyof EngineEventPayloads>(event: K, handler: (...payload: EngineEventPayloads[K]) => void) {
+    this.events.on(event, handler)
+    return this
+  }
+
+  once<K extends keyof EngineEventPayloads>(event: K, handler: (...payload: EngineEventPayloads[K]) => void) {
+    this.events.once(event, handler)
+    return this
+  }
+
+  off<K extends keyof EngineEventPayloads>(event: K, handler?: (...payload: EngineEventPayloads[K]) => void) {
+    this.events.off(event, handler)
+    return this
   }
 
   get status() {
@@ -57,6 +110,15 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
   }
   getTask(taskId: string) {
     return this.tasks.get(taskId)?.snapshot()
+  }
+  getTaskTrace(taskId: string) {
+    return this.tasks.get(taskId)?.trace?.snapshot()
+  }
+  getNodeActivation(taskId: string, activationId: number) {
+    return this.tasks.get(taskId)?.trace?.get(activationId)
+  }
+  getTaskState(taskId: string) {
+    return this.tasks.get(taskId)?.state.snapshot()
   }
   getTaskGraph(taskId: string) {
     return this.tasks.get(taskId)?.getGraph()
@@ -84,12 +146,16 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     return this.tasks.get(taskId)?.getFrameNodeData(frameId, nodeId)
   }
 
-  fromJSON(json: JsonGraph | string) {
+  /** Stop the current workflow and load and validate a new graph. */
+  loadGraph(json: JsonGraph | string) {
     const definition = structuredClone(typeof json === 'string' ? (JSON.parse(json) as JsonGraph) : json)
+    const issues = validateGraphTypes(definition, this.registry, { strict: this.options.strictDataTypes })
+    const failure = issues.find(issue => issue.severity === 'error')
+    if (failure) throw new TypeError(failure.message)
     this.stop()
     this.definition = definition
     try {
-      this.loadGraph()
+      this.instantiateSessionNodes()
     } catch (error) {
       this.definition = undefined
       this.stop()
@@ -97,37 +163,43 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     }
   }
 
-  private loadGraph() {
+  private instantiateSessionNodes() {
+    if (!this.definition) return
+    const nodesById = new Map<string, ExecutionNode>()
     try {
-      if (this.definition) new GraphCompiler(this.runtime.fromJSON(structuredClone(this.definition)))
+      new GraphCompiler(loadGraphNodes(this.registry, structuredClone(this.definition), nodesById))
     } finally {
-      this.loadedNodes = [...this.runtime.nodes.values()]
+      // Stop must also destroy any nodes created before a load or validation error.
+      this.loadedNodes = [...nodesById.values()]
     }
   }
 
-  async process(options: Pick<ProcessOptions, 'debug'> = {}) {
+  async start(options: StartOptions = {}) {
     if (this.session) throw new Error('Workflow is running; stop the current run first.')
+    const retry = resolveRetryTiming(this.options.retry, options.retry)
+    const state = new TaskStateStore(this.options.state, options.initialState)
     let initialized!: () => void
     const ready = new Promise<void>((resolve) => {
       initialized = resolve
     })
-    const session: Session = {
+    const session: WorkflowSession = {
       controller: new AbortController(),
       ready,
       initialized,
       debug: options.debug ?? this.options.debug ?? false,
+      retry,
     }
     this.session = session
     try {
       this.setStatus('running')
       if (this.stopping) await this.stopping
       if (!this.isActive(session)) return
-      if (!this.loadedNodes.length) this.loadGraph()
+      if (!this.loadedNodes.length) this.instantiateSessionNodes()
       session.lifecycle = this.createLifecycle(this.loadedNodes, session)
       await session.lifecycle.activate()
       if (!this.isActive(session)) return
       session.initialized()
-      await this.runTask(session, { type: 'start' })
+      await this.runTask(session, { type: 'start' }, state)
     } catch (error) {
       if (this.isActive(session)) this.stop()
       await this.whenStopped()
@@ -151,10 +223,6 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     void stopping.then(() => {
       if (this.stopping === stopping) this.stopping = undefined
     })
-    for (const node of nodes) {
-      if (this.runtime.nodes.get(node.id) === node) this.runtime.nodes.delete(node.id)
-      if (this.runtime.nodeListeners.get(node.id) === node) this.runtime.nodeListeners.delete(node.id)
-    }
     for (const task of this.tasks.values()) task.stop()
     session?.controller.abort()
     session?.initialized()
@@ -181,6 +249,11 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     return this
   }
 
+  /** Deliver an application response to a specific suspended activation. */
+  resumeInterrupt(taskId: string, interruptId: string, answer: JsonValue) {
+    return this.tasks.get(taskId)?.resumeInterrupt(interruptId, answer) ?? false
+  }
+
   setBreakpoint(nodeId: string, enabled: boolean) {
     if (this.definition) {
       for (const node of [
@@ -196,31 +269,26 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     return this
   }
 
-  emit(...args: Parameters<EventEmitter<EngineEventPayloads>['emit']>) {
-    const [name, ...payload] = args
-    void this.dispatchEvent(String(name), ...payload).catch((error) => this.publish('error', error))
-    this.publish(name, ...payload)
-    return this
-  }
-
   async dispatchEvent(eventName: string, ...payload: unknown[]) {
     return this.dispatch(eventName, payload)
   }
-  async handleNodeEvents(eventName: string, ...payload: unknown[]) {
-    await this.dispatch(eventName, payload)
+
+  async dispatchEventWithOptions(eventName: string, options: TaskStateOptions, ...payload: unknown[]) {
+    return this.dispatch(eventName, payload, undefined, options)
   }
 
-  private async dispatch(eventName: string, payload: unknown[], parentTaskId?: string) {
+  private async dispatch(eventName: string, payload: unknown[], parentTaskId?: string, options?: TaskStateOptions, parentActivationId?: number) {
     const session = this.session
     if (!session) return
     // Clone before awaiting so later caller mutations cannot change submitted events.
     const isolatedPayload = structuredClone(payload)
+    const state = new TaskStateStore(this.options.state, options?.initialState)
     await session.ready
     if (!this.isActive(session)) return
-    return this.runTask(session, { type: 'event', eventName, payload: isolatedPayload }, parentTaskId)
+    return this.runTask(session, { type: 'event', eventName, payload: isolatedPayload }, state, parentTaskId, parentActivationId)
   }
 
-  private async runTask(session: Session, trigger: TaskSnapshot['trigger'], parentTaskId?: string) {
+  private async runTask(session: WorkflowSession, trigger: TaskSnapshot['trigger'], state: TaskStateStore, parentTaskId?: string, parentActivationId?: number) {
     if (!this.isActive(session)) return
     const json = this.definition ?? {
       nodes: [],
@@ -229,37 +297,39 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
       variables: [],
       viewport: { x: 0, y: 0, zoom: 1 },
     }
-    const options = { ...this.options, debug: session.debug, ctx: structuredClone(this.options.ctx ?? {}) }
+    const options = { ...this.options, debug: session.debug, retry: session.retry, context: structuredClone(this.options.context ?? {}) }
     const nodeStates = new Map(this.loadedNodes.map((node) => [node.id, node.state]))
     const previousStatuses = this.getNodeStatuses()
-    const task = this.tasks.create({ json, trigger, parentTaskId }, (event, ...args) => this.taskEvent(event, ...args))
+    const task = this.tasks.create({ json, trigger, parentTaskId, parentActivationId, state }, resolveTraceOptions(options.trace),
+      (event, ...args) => this.taskEvent(event, ...args))
     for (const id of previousStatuses.keys()) this.publish('node:status:changed', id, 'idle')
     this.updateStatus()
     this.publish('task:created', task.snapshot())
     try {
       const scheduler = new TaskScheduler(
-        this.runtime.fork(),
+        this.registry,
+        this.nodeExecutor,
         json,
         options,
         task.id,
+        task.state,
         task.callbacks({
-          emit: (name, ...payload) => {
-            void this.dispatch(name, payload, task.id).catch((error) => this.publish('error', error))
+          emit: (activationId, name, ...payload) => {
+            void this.dispatch(name, payload, task.id, undefined, activationId).catch((error) => this.publish('error', error))
           },
           nodeState: (nodeId) => nodeStates.get(nodeId),
         }),
         this.loadedNodes
       )
       task.attach(scheduler)
-      await task.run((runner) =>
-        trigger.type === 'start'
-          ? runner.process()
-          : runner.handleNodeEvents(
-              trigger.eventName!,
-              trigger.payload!,
-              session.lifecycle?.subscriptions(trigger.eventName!) ?? []
-            )
-      )
+      await task.run(async (runner) => {
+        if (trigger.type === 'start') await runner.runStartTask()
+        else await runner.runEventTask(
+          trigger.eventName!, trigger.payload!,
+          session.lifecycle?.subscriptions(trigger.eventName!) ?? [],
+        )
+        await runner.waitForStreams()
+      })
       return task.snapshot()
     } catch (error) {
       task.fail(error)
@@ -278,7 +348,18 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
       return
     }
     const [taskId, ...payload] = args
-    if (event === 'node:status:changed') {
+    if (event === 'task:node:progress') {
+      this.publish('task:node:progress', taskId as string, payload[0] as import('./types').NodeProgress)
+      return
+    }
+    if (event === 'task:node:attempt') {
+      this.publish('task:node:attempt', taskId as string, payload[0] as import('./types').NodeAttempt)
+      return
+    }
+    if (event === 'task:state:committed') {
+      this.publish('task:state:committed', taskId as string, payload[0] as TaskStateCommit)
+      return
+    } else if (event === 'node:status:changed') {
       this.publish(
         'task:node:status:changed',
         taskId as string,
@@ -301,7 +382,7 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
 
   private updateStatus() {
     if (!this.session) return
-    const active = [...this.tasks.values()].filter((task) => ['running', 'waiting', 'paused'].includes(task.status))
+    const active = [...this.tasks.values()].filter((task) => ['running', 'waiting', 'paused', 'interrupted'].includes(task.status))
     this.setStatus(active.length && active.every((task) => task.status === 'paused') ? 'paused' : 'running')
   }
   private setStatus(status: EngineStatus) {
@@ -310,16 +391,9 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     this.publish('status:changed', status)
   }
   private publish<K extends keyof EngineEventPayloads>(name: K, ...payload: EngineEventPayloads[K]) {
-    try {
-      super.emit(name, ...payload)
-    } catch (error) {
-      console.error('Engine event observer failed', error)
-    }
+    this.events.emit(name, ...payload)
   }
-  protected handleListenerError(error: unknown) {
-    console.error('Engine event observer failed', error)
-  }
-  private isActive(session: Session) {
+  private isActive(session: WorkflowSession) {
     return this.session === session && !session.controller.signal.aborted
   }
   private historyLimit(options = this.options) {
@@ -327,15 +401,17 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     if (!Number.isInteger(limit) || limit < 0) throw new RangeError('maxTaskHistory must be a non-negative integer')
     return limit
   }
-  setOptions(options: ProcessOptions) {
+  setOptions(options: EngineOptions) {
     this.historyLimit(options)
+    resolveRetryTiming(options.retry)
+    resolveTraceOptions(options.trace)
     this.options = options
   }
-  setCtx(ctx: unknown) {
-    this.options.ctx = ctx
+  setContext(context: unknown) {
+    this.options.context = context
   }
 
-  private createLifecycle(nodes: NodeInstanceType[], session?: Session) {
+  private createLifecycle(nodes: ExecutionNode[], session?: WorkflowSession) {
     const controller = session?.controller ?? new AbortController()
     if (!session) controller.abort()
     return new NodeLifecycle(
@@ -343,24 +419,24 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
       (node) => {
         const ctx = createExecutionContext(node, {
           signal: controller.signal,
-          ctx: this.options.ctx,
+          context: this.options.context,
           isActive: () => !!session && this.isActive(session),
-          getService: (name) => this.runtime.getService(name),
+          services: this.nodeExecutor.services,
           emit: (name, ...payload) => {
-            this.emit(name, ...payload)
+            void this.dispatchEvent(name, ...payload).catch((error) => this.publish('error', error))
           },
         })
         return {
           nodeId: node.id,
-          nodeType: node.nodeType,
+          nodeType: node.definitionId,
           signal: controller.signal,
-          state: node.state,
+          nodeState: node.state,
           getInput: ctx.getInput,
           setOutput: (name, value) => node.setOutput(name, value),
           emitEvent: ctx.emitEvent,
           services: ctx.services,
           data: ctx.data,
-          ctx: ctx.ctx,
+          context: ctx.context,
           inputs: ctx.inputs,
           outputs: ctx.outputs,
           error: ctx.error,
@@ -370,27 +446,36 @@ export class Engine<NodeDefs extends Record<string, NodeClassType>> extends Even
     )
   }
 
-  createNodeInstance(...args: Parameters<Runtime<NodeDefs>['createNodeInstance']>) {
-    return this.runtime.createNodeInstance(...args)
+  createNodeInstance<K extends keyof NodeDefs>(nodeType: K | NodeDefs[K], options?: NodeOptions<NodeDefs[K]>) {
+    return createExecutionNode(this.registry, nodeType, options)
   }
-  async executeNode(node: NodeInstanceType, opt: { ctx?: unknown; error?: unknown } = {}) {
-    await this.runtime.executeNode(
-      node,
-      createExecutionContext(node, {
-        ...opt,
-        isActive: () => true,
-        getService: (name) => this.runtime.getService(name),
-        emit: (name, ...payload) => {
-          this.emit(name, ...payload)
-        },
+  async executeNode(node: ExecutionNode, opt: TaskStateOptions & { context?: unknown; error?: unknown } = {}) {
+    let active = true
+    const state = new TaskStateStore(this.options.state, opt.initialState).activate(() => active, () => {})
+    try {
+      await this.nodeExecutor.executeNode(node, {
+        ...createExecutionContext(node, {
+          ...opt,
+          isActive: () => true,
+          services: this.nodeExecutor.services,
+          emit: (name, ...payload) => {
+            void this.dispatchEvent(name, ...payload).catch((error) => this.publish('error', error))
+          },
+        }),
+        state: state.state,
+        next: state.commit,
       })
-    )
-    return this
+      state.commit()
+      return this
+    } finally {
+      active = false
+      state.discard()
+    }
   }
   async runNode<K extends keyof NodeDefs>(
     nodeType: K | NodeDefs[K],
     options?: NodeOptions<NodeDefs[K]>,
-    opt?: { ctx?: unknown; error?: unknown }
+    opt?: TaskStateOptions & { context?: unknown; error?: unknown }
   ) {
     return this.executeNode(this.createNodeInstance(nodeType, options), opt)
   }

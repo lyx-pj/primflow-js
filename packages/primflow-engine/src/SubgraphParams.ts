@@ -1,10 +1,11 @@
-import type { NodeInstanceType } from './Runtime'
+import { isDataPort as isDataPortType } from '@lyx-pj/primflow-model'
+import type { ExecutionNode } from './ExecutionNode'
 
 type PortLike = { name: string; type: string }
 
 /** Only data ports participate in parameters; exclude execution and spacer ports. */
 function isDataPort(port: PortLike) {
-  return port.type !== 'exec' && port.type !== 'spacer'
+  return isDataPortType(port.type)
 }
 
 /**
@@ -34,9 +35,9 @@ function pairDataPorts(source: PortLike[], target: PortLike[]) {
  * Skip incompatible types instead of interrupting the execution chain.
  * Skip undefined unless the target accepts any.
  */
-function canCopy(source: PortLike, target: PortLike, value: unknown) {
+function canCopy(node: ExecutionNode, source: PortLike, target: PortLike, value: unknown) {
   if (value === undefined && target.type !== 'any') return false
-  return source.type === 'any' || target.type === 'any' || source.type === target.type
+  return node.dataTypes.checkConnection(source.type, target.type)
 }
 
 /**
@@ -44,20 +45,20 @@ function canCopy(source: PortLike, target: PortLike, value: unknown) {
  *
  * Synchronize matching entry outputs so internal nodes can read the parameters.
  */
-export function applySubgraphEntryParams(parent: NodeInstanceType, entry: NodeInstanceType) {
+export function applySubgraphEntryParams(parent: ExecutionNode, entry: ExecutionNode) {
   // Loop entries use their own iteration values, outside subgraph parameter mapping.
   if (entry.type !== 'start') return
   const parentInputs = parent.inputs.filter(isDataPort)
   const entryInputs = entry.inputs.filter(isDataPort)
   for (const [from, to] of pairDataPorts(parentInputs, entryInputs)) {
     const value = parent.inputValues[from.name]
-    if (!canCopy(from, to, value)) continue
+    if (!canCopy(parent, from, to, value)) continue
     entry.setInput(to.name, value)
   }
   const entryOutputs = entry.outputs.filter(isDataPort)
   for (const [from, to] of pairDataPorts(entryInputs, entryOutputs)) {
     const value = entry.inputValues[from.name]
-    if (!canCopy(from, to, value)) continue
+    if (!canCopy(parent, from, to, value)) continue
     entry.setOutput(to.name, value)
   }
 }
@@ -67,13 +68,13 @@ export function applySubgraphEntryParams(parent: NodeInstanceType, entry: NodeIn
  *
  * Call after subgraph completion so downstream parent nodes can read the returned values.
  */
-export function applySubgraphExitParams(parent: NodeInstanceType, exit: NodeInstanceType | undefined) {
+export function applySubgraphExitParams(parent: ExecutionNode, exit: ExecutionNode | undefined) {
   if (!exit || exit.type !== 'end') return
   const exitInputs = exit.inputs.filter(isDataPort)
   const parentOutputs = parent.outputs.filter(isDataPort)
   for (const [from, to] of pairDataPorts(exitInputs, parentOutputs)) {
     const value = exit.inputValues[from.name]
-    if (!canCopy(from, to, value)) continue
+    if (!canCopy(parent, from, to, value)) continue
     parent.setOutput(to.name, value)
   }
 }

@@ -1,4 +1,6 @@
-import type { ExecutorFn, EventFn, NodeHost, ToolsViewHost, NodeLifecycleHook, LoopConfig } from './types'
+import { DataTypeRegistry, portTypeId, type PortType, type PortTypeId, type PortValue, type StreamType } from './DataTypes'
+import type { JsonValue, TaskStateSnapshot } from './TaskState'
+import type { ExecutorFn, EventFn, NodeHost, ToolsViewHost, NodeLifecycleHook, LoopConfig, NodeRetryPolicy } from './types'
 import { mergeDeep } from './shared/merge'
 import { ChangedEvent } from './ChangedEvent'
 import type { NodeStyle } from './NodeRegistry'
@@ -8,30 +10,39 @@ interface Port {
   label?: string
   id?: string
   showPort?: boolean
+  /** Draw the port label next to the port; defaults to true. */
+  showLabel?: boolean
+  /**
+   * Label offset from the port, in pixels.
+   *
+   * Overrides the group default, which places input labels to the right of the
+   * port and output labels to its left.
+   */
+  labelPosition?: { x?: number; y?: number }
 }
 
-export interface InputPort extends Port {
-  type: keyof TypeMap
+export type InputPort<T = string> = Port & {
   showInput?: boolean
   options?: ((values: Record<string, unknown>) => { label: string; value: string }[] | Promise<{ label: string; value: string }[]>) | (readonly { label: string; value: string }[])
-  _options?: readonly { label: string; value: string }[] // resolved options
+  _options?: readonly { label: string; value: string }[]
+  type: T
+  editor?: 'select' | 'textarea'
+  /**
+   * Width of the control shown next to the port on the canvas.
+   *
+   * Overrides the global editor box width, so a port can use a control that
+   * needs more or less room than the default.
+   */
+  editorWidth?: number
 }
 
-export interface OutputPort extends Port {
-  type: 'exec' | 'spacer' | 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any' | 'textarea'
+export interface OutputPort<T = string> extends Port {
+  type: T
 }
 
-type TypeMap = {
-  string: string
-  number: number
-  boolean: boolean
-  select: string
-  array: unknown[]
-  exec: never
-  spacer: never
-  any: unknown
-  textarea: string
-  object: Record<string, unknown>
+export type NodePortValue<T> = PortValue<T>
+type InstancePorts<P extends readonly { type: PortType }[]> = {
+  [K in keyof P]: Omit<P[K], 'type'> & { type: PortTypeId<P[K]['type']> }
 }
 
 export interface ExecutorArgs<T extends NodeClassType> {
@@ -42,47 +53,81 @@ export interface ExecutorArgs<T extends NodeClassType> {
 }
 
 export type NodeClassType = typeof Node
+const registeredDefinitionIds = new WeakMap<NodeClassType, string>()
 
-export type InputsToValues<T extends { inputs: readonly { name: string; type: keyof TypeMap }[] }> =
+export function setRegisteredDefinitionId(NodeClass: NodeClassType, id: string) {
+  registeredDefinitionIds.set(NodeClass, id)
+}
+
+export type InputsToValues<T extends { inputs: readonly { name: string; type: PortType }[] }> =
   T['inputs'] extends readonly unknown[]
-    ? { [K in T['inputs'][number] as K['name']]: TypeMap[K['type']] }
+    ? { [K in T['inputs'][number] as K['type'] extends 'exec' | 'spacer' | StreamType ? never : K['name']]: NodePortValue<K['type']> }
     : {}
 
 export type NodeOptions<T extends NodeClassType> = {
   id?: string
   title?: string
   position?: { x: number; y: number }
-  data?: unknown
-  values?: Partial<InputsToValues<T['definition']>>
+  /** Application configuration persisted with the node. */
+  data?: JsonValue
+  inputValues?: Partial<InputsToValues<T['definition']>>
   style?: NodeStyle
   inputs?: InputPort[]
   outputs?: OutputPort[]
-  subgraphId?: string // only for subgraph node
+  targetGraphId?: string
+  /** @deprecated Use targetGraphId. */
+  subgraphId?: string
   breakpoint?: boolean
+  /** Collapsed presentation for a container card; defaults to false. */
+  collapsed?: boolean
   loop?: LoopConfig
 }
 
-export abstract class Node {
+export type NodeValueOutput =
+  | { input: string; fallback: unknown }
+  | { input: string; read: (input: unknown, state: TaskStateSnapshot) => unknown }
+
+abstract class Node {
 
   static definition: {
-    inputs: readonly InputPort[]
-    outputs: readonly OutputPort[]
+    inputs: readonly InputPort<PortType>[]
+    outputs: readonly OutputPort<PortType>[]
+    name?: string
+    kind?: string
+    /** @deprecated Use name. */
     title?: string
     style?: NodeStyle
-    type?: string // 'default' | 'subgraph'
-    executionMode?: 'step' | 'source'
+    /** @deprecated Use kind. */
+    type?: string
+    executionMode?: 'step' | 'source' | 'stream'
+    /** Data-only outputs forward an input or read task state when a consumer needs the value. */
+    valueOutputs?: Readonly<Record<string, NodeValueOutput>>
   } = {
     inputs: [] as const,
     outputs: [] as const,
-    title: '',
     style: {}
   } as const
 
-  declare static id: string
-
+  /**
+   * The node's executor.
+   *
+   * Use a function for a self-contained node. Use a string to name an executor
+   * the engine registers, which keeps the node definition free of behavior and
+   * lets the implementation live outside the node package.
+   */
   declare static executor?: ExecutorFn | string
 
+  /** @deprecated Use definitionId. */
   declare static readonly type: string
+
+  static get definitionId(): string | undefined {
+    return registeredDefinitionIds.get(this)
+  }
+
+  declare static retryPolicy?: NodeRetryPolicy
+
+  /** Validate published values when tracing a downstream input failure. */
+  declare static outputValidators?: Readonly<Record<string, (value: unknown) => boolean>>
 
   declare static onEvent?: EventFn
 
@@ -93,90 +138,111 @@ export abstract class Node {
   declare static onDestroy?: NodeLifecycleHook
 }
 
+type NodeDefinitionOptions = Pick<NodeClassType,
+  'definition' | 'executor' | 'retryPolicy' | 'outputValidators' |
+  'onEvent' | 'onActive' | 'onDeactivate' | 'onDestroy'
+> & { type?: string }
+
+type DefinedNode<T extends NodeDefinitionOptions> =
+  Omit<NodeClassType, keyof NodeDefinitionOptions & keyof T> &
+  Pick<T, keyof NodeDefinitionOptions & keyof T> &
+  (abstract new () => Node)
+
+/** Define a registrable node while retaining the literal types of its ports. */
+export function defineNode<const T extends NodeDefinitionOptions>(options: T): DefinedNode<T> {
+  const { type, executor, retryPolicy, outputValidators, onEvent, onActive, onDeactivate, onDestroy } = options
+  class RegisteredNode extends Node {
+    static override get definition() {
+      return options.definition
+    }
+  }
+  return Object.assign(RegisteredNode, {
+    type, executor, retryPolicy, outputValidators, onEvent, onActive, onDeactivate, onDestroy,
+  }) as unknown as DefinedNode<T>
+}
+
+export type RegisteredNodeDefinition<T extends NodeClassType = NodeClassType> = Omit<T['definition'], 'inputs' | 'outputs'> & {
+  inputs: InstancePorts<T['definition']['inputs']>
+  outputs: InstancePorts<T['definition']['outputs']>
+  readonly id: string
+  name?: string
+  readonly kind: string
+}
+
+export function resolveNodeDefinition<T extends NodeClassType>(NodeClass: T): RegisteredNodeDefinition<T> {
+  const definition = NodeClass.definition
+  const resolved = {
+    ...definition,
+    inputs: definition.inputs.map(input => ({ ...input, type: portTypeId(input.type) })) as InstancePorts<T['definition']['inputs']>,
+    outputs: definition.outputs.map(output => ({ ...output, type: portTypeId(output.type) })) as InstancePorts<T['definition']['outputs']>,
+    id: NodeClass.definitionId ?? '',
+    name: definition.name ?? definition.title,
+    kind: definition.kind || definition.type || 'default',
+  }
+  return Object.defineProperties(resolved, {
+    id: { writable: false, configurable: false },
+    kind: { writable: false, configurable: false },
+  }) as RegisteredNodeDefinition<T>
+}
+
 export class NodeInstance<T extends NodeClassType> {
-  declare public type: string
-  declare public nodeType: string
-  public _values: InputsToValues<T['definition']> = {} as InputsToValues<T['definition']>
-  public definition: T['definition']
+  private _inputValues: InputsToValues<T['definition']> = {} as InputsToValues<T['definition']>
+  public readonly definition: RegisteredNodeDefinition<T>
   public id: string = ''
-  public data: unknown = null
-  public subgraphId?: string // only for subgraph node
-  public loop?: LoopConfig
+  public data?: JsonValue
+  public graphId = ''
+  public targetGraphId?: string
+  private _loop?: LoopConfig
   _bbox: { x: number; y: number; width: number; height: number; left: number; top: number } | null = null
   public states: {
     position: { x: number, y: number }
     title?: string
     style?: NodeStyle
-    inputs?: T['definition']['inputs']
-    outputs?: T['definition']['outputs']
+    inputs?: readonly InputPort[]
+    outputs?: readonly OutputPort[]
     breakpoint?: boolean
+    collapsed?: boolean
   } = {
     position: { x: 0, y: 0 },
   }
   public graph?: NodeHost
   public toolsView: ToolsViewHost | null = null
 
-  constructor(Cls: T, options?: NodeOptions<T>) {
-    const { inputs, ...definition } = Cls.definition
-    
-    this.definition = { ...structuredClone(definition), inputs: inputs.map(input => {
-      return { ...input }
-    }) }
+  private readonly dataTypes: DataTypeRegistry
+
+  constructor(Cls: T, options?: NodeOptions<T>, dataTypes = new DataTypeRegistry()) {
+    this.dataTypes = dataTypes
+    const { inputs, valueOutputs, ...definition } = resolveNodeDefinition(Cls)
+    this.definition = {
+      ...structuredClone(definition),
+      inputs: inputs.map(input => ({ ...input })),
+    } as RegisteredNodeDefinition<T>
+    Object.defineProperties(this.definition, {
+      id: { writable: false, configurable: false },
+      kind: { writable: false, configurable: false },
+    })
+    if (valueOutputs) {
+      this.definition.valueOutputs = Object.fromEntries(
+        Object.entries(valueOutputs).map(([port, output]) => [
+          port, 'read' in output ? { ...output } : structuredClone(output),
+        ]),
+      )
+    }
 
     this.states.position = options?.position ?? { x: 0, y: 0 }
     this.states.breakpoint = options?.breakpoint ?? false
-    this.data = options?.data ?? null
-    
-    const type = this.definition.type || 'default'
-    const nodeType = Cls.type
-
-    const typeDesc = Object.getOwnPropertyDescriptor(this, 'type')
-    if (!typeDesc || typeDesc.configurable) {
-      Object.defineProperty(this, 'type', {
-        get() {
-          return type
-        },
-        configurable: false,
-        enumerable: true
-      })
-    }
-
-    const nodeTypeDesc = Object.getOwnPropertyDescriptor(this, 'nodeType')
-    if (!nodeTypeDesc || nodeTypeDesc.configurable) {
-        Object.defineProperty(this, 'nodeType', {
-        get() {
-          return nodeType
-        },
-        configurable: false,
-        enumerable: true
-      })
-    }
-
-    if (options?.values) this._values = { ...options.values } as InputsToValues<T['definition']>
-    if (options?.data) this.data = options.data
-    if (options?.title) this.states.title = options.title
+    this.states.collapsed = options?.collapsed ?? false
+    this.data = options?.data
+    if (options?.inputValues) this._inputValues = { ...options.inputValues } as InputsToValues<T['definition']>
+    if (options?.title !== undefined) this.states.title = options.title
     if (options?.id) this.id = options.id
     if (options?.style) this.style = options.style
-    if (options?.subgraphId) this.subgraphId = options.subgraphId
+    this.targetGraphId = options?.targetGraphId ?? options?.subgraphId
     if (options?.loop) this.loop = structuredClone(options.loop)
     if (options?.position) this.states.position = options.position
 
     if (options?.inputs) {
-      this.states.inputs = options.inputs.map(input => {
-        const obj: InputPort = {
-          id: input.id,
-          name: input.name,
-          type: input.type,
-        }
-        if (input.label !== undefined) obj.label = input.label
-        if (input.showInput !== undefined) obj.showInput = input.showInput
-        if (input.showPort !== undefined) obj.showPort = input.showPort
-        if (input.options) {
-          obj.options = input.options ? input.options : undefined
-          obj._options = Array.isArray(input.options) ? input.options : undefined
-        }
-        return obj 
-      })
+      this.states.inputs = options.inputs.map(input => ({ ...input }))
     }
     if (options?.outputs) {
       this.states.outputs = options.outputs.map(output => {
@@ -191,32 +257,15 @@ export class NodeInstance<T extends NodeClassType> {
       })
     }
 
-    this.inputs.forEach(input => {
+    for (const input of this.inputs) {
       if (Array.isArray(input.options)) {
         input._options = input.options
+        const key = input.name as keyof InputsToValues<T['definition']>
+        if (input.editor === 'select' && this._inputValues[key] === undefined) {
+          this._inputValues[key] = (input.options[0]?.value ?? '') as InputsToValues<T['definition']>[typeof key]
+        }
       } else if (typeof input.options === 'function') {
         input._options = []
-      }
-    })
-
-    if (!this.states.inputs) {
-      for (const input of this.inputs) {
-        const key = input.name as keyof InputsToValues<T['definition']>
-        const val = options?.values?.[key]
-        if (input.type === 'select') {
-          if (val === undefined) {
-            if (Array.isArray(input.options)) {
-              const inputOptions = input.options || []
-              this._values[key] = (inputOptions.length > 0 ? inputOptions[0].value : '') as
-                InputsToValues<T['definition']>[keyof InputsToValues<T['definition']>]
-              const oldvalue = { ...this._values }
-              const newvalue = { [input.name]: this._values[key] }
-              this.raiseChangedEvent('values', oldvalue, newvalue)
-            }
-          }
-        } else if (val !== undefined) {
-          this._values[key] = val
-        }
       }
     }
   }
@@ -224,6 +273,17 @@ export class NodeInstance<T extends NodeClassType> {
   get bbox() {
     return this._bbox
   }
+
+  get definitionId() { return this.definition.id }
+  get kind() { return this.definition.kind }
+
+  /** @deprecated Use definitionId. */
+  get nodeType() { return this.definitionId }
+  /** @deprecated Use kind. */
+  get type() { return this.kind }
+  /** @deprecated Use targetGraphId. */
+  get subgraphId() { return this.targetGraphId }
+  set subgraphId(value: string | undefined) { this.targetGraphId = value }
 
   get breakpoint() {
     return this.states.breakpoint ?? false
@@ -234,6 +294,18 @@ export class NodeInstance<T extends NodeClassType> {
     if (oldValue === value) return
     this.states.breakpoint = value
     this.raiseChangedEvent('breakpoint', oldValue, value)
+  }
+
+  /** Collapsed presentation for a container card; unrelated nodes ignore it. */
+  get collapsed() {
+    return this.states.collapsed ?? false
+  }
+
+  set collapsed(value: boolean) {
+    const oldValue = this.collapsed
+    if (oldValue === value) return
+    this.states.collapsed = value
+    this.raiseChangedEvent('collapsed', oldValue, value)
   }
 
   // Get current position
@@ -256,7 +328,7 @@ export class NodeInstance<T extends NodeClassType> {
 
   // Get and set title with change event
   get title() {
-    return this.states.title ?? this.definition.title ?? ''
+    return this.states.title ?? this.definition.name ?? ''
   }
   // Set title and trigger change event
   set title(value: string) {
@@ -267,21 +339,31 @@ export class NodeInstance<T extends NodeClassType> {
   }
 
   // Get and set values with change event
-  get values() {
-    return this._values
+  get inputValues() {
+    return this._inputValues
   }
-  set values(values: Partial<InputsToValues<T['definition']>>) {
+  set inputValues(values: Partial<InputsToValues<T['definition']>>) {
     this.checkValues(values)
-    const oldvalue = { ...this._values }
-    this._values = { ...this._values, ...values }
-    this.raiseChangedEvent('values', oldvalue, values)
+    const oldvalue = { ...this._inputValues }
+    this._inputValues = { ...this._inputValues, ...values }
+    this.raiseChangedEvent('inputValues', oldvalue, values)
+  }
+
+  get loop() {
+    return this._loop
+  }
+  set loop(value: LoopConfig | undefined) {
+    const oldvalue = this._loop
+    if (oldvalue === value) return
+    this._loop = value
+    this.raiseChangedEvent('loop', oldvalue, value)
   }
 
   // Get and set inputs with change event
   get inputs() {
-    return (this.states.inputs || this.definition.inputs) as T['definition']['inputs']
+    return (this.states.inputs || this.definition.inputs) as InstancePorts<T['definition']['inputs']>
   }
-  set inputs(inputs: T['definition']['inputs']) {
+  set inputs(inputs: InstancePorts<T['definition']['inputs']>) {
     const nameSet = new Set<string>()
     for (const input of inputs) {
       if (nameSet.has(input.name)) {
@@ -296,9 +378,9 @@ export class NodeInstance<T extends NodeClassType> {
 
   // Get and set outputs with change event
   get outputs() {
-    return (this.states.outputs || this.definition.outputs) as T['definition']['outputs']
+    return (this.states.outputs || this.definition.outputs) as InstancePorts<T['definition']['outputs']>
   }
-  set outputs(outputs: T['definition']['outputs']) {
+  set outputs(outputs: InstancePorts<T['definition']['outputs']>) {
     const nameSet = new Set<string>()
     for (const output of outputs) {
       if (nameSet.has(output.name)) {
@@ -343,13 +425,13 @@ export class NodeInstance<T extends NodeClassType> {
   }
 
   // Get an input port by name
-  public getInput(name: T['definition']['inputs'][number]['name']) {
-    return this.definition.inputs.find(input => input.name === name)
+  public getInputPort(name: string): InputPort | undefined {
+    return this.inputs.find(input => input.name === name)
   }
 
   // Get an output port by name
-  public getOutput(name: T['definition']['outputs'][number]['name']) {
-    return this.definition.outputs.find(output => output.name === name)
+  public getOutputPort(name: string): OutputPort | undefined {
+    return this.outputs.find(output => output.name === name)
   }
 
   public setGraph(graph: NodeHost) {
@@ -358,62 +440,22 @@ export class NodeInstance<T extends NodeClassType> {
   }
 
   public toString() {
-    return `Node#${this.id}(${this.nodeType})`
+    return `Node#${this.id}(${this.definitionId})`
   }
 
-  private checkValues(values: Partial<InputsToValues<T['definition']>>): boolean {
+  private checkValues(values: Partial<InputsToValues<T['definition']>>): void {
     for (const key in values) {
       const input = this.inputs.find(i => i.name === key)
       if (!input) {
-        throw new Error(`Input "${key}" not found in node definition.`)
+        throw new Error(`Input port "${key}" not found on this node.`)
       }
       const value = values[key as keyof InputsToValues<T['definition']>]
-      switch (input.type) {
-        case 'string':
-          if (typeof value !== 'string') {
-            throw new Error(`Input "${key}" must be a string.`)
-          }
-          break
-        case 'number':
-          if (typeof value !== 'number' || isNaN(value)) {
-            throw new Error(`Input "${key}" must be a number.`)
-          }
-          break
-        case 'boolean':
-          if (typeof value !== 'boolean') {
-            throw new Error(`Input "${key}" must be a boolean.`)
-          }
-          break
-        case 'array':
-          if (!Array.isArray(value)) {
-            throw new Error(`Input "${key}" must be an array.`)
-          }
-          break
-        case 'object':
-          if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-            throw new Error(`Input "${key}" must be an object.`)
-          }
-          break
-        case 'select':
-          if (typeof value !== 'string') {
-            throw new Error(`Input "${key}" must be a string.`)
-          }
-          break
-        case 'textarea':
-          if (typeof value !== 'string') {
-            throw new Error(`Input "${key}" must be a string.`)
-          }
-          break
-        default:
-          console.warn(`Unknown input type "${input.type}" for input "${key}".`)
-          return false
-      }
+      this.dataTypes.assertValue(input.type, value, `Input "${key}"`)
     }
-    return true
   }
 
   private raiseChangedEvent(
-    propertyName: 'position' | 'title' | 'style' | 'values' | 'inputs' | 'outputs' | 'breakpoint',
+    propertyName: 'position' | 'title' | 'style' | 'inputValues' | 'inputs' | 'outputs' | 'breakpoint' | 'collapsed' | 'loop',
     oldvalue?: unknown,
     newvalue?: unknown
   ) {

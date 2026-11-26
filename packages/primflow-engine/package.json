@@ -2,6 +2,7 @@
   "name": "@lyx-pj/primflow-engine",
   "version": "1.1.0",
   "private": false,
+  "description": "Environment-agnostic workflow execution engine for Primflow: runs graphs, manages events, tasks, loops and node lifecycles without DOM or host-specific APIs.",
   "type": "module",
   "files": [
     "build/**/*",
@@ -27,7 +28,8 @@
     "clean": "rimraf build",
     "build": "pnpm run clean && concurrently 'rolldown -c rolldown.config.ts' 'tsc -b tsconfig.json'",
     "dev": "concurrently 'rolldown -c rolldown.config.ts --watch' 'tsc -b tsconfig.json --watch'",
-    "typecheck": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json && tsc -p tsconfig.tests.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
     "test": "vitest run --reporter verbose --passWithNoTests",
     "lint": "oxlint --config ../../.oxlintrc.json --deny-warnings ."
   },
@@ -41,9 +43,10 @@
   "keywords": [
     "workflow",
     "orchestration",
-    "runtime",
     "execution",
     "pipeline",
-    "engine"
+    "engine",
+    "environment-agnostic",
+    "isomorphic"
   ]
 }
