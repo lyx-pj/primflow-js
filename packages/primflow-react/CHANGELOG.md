@@ -1,5 +1,23 @@
 # @lyx-pj/primflow-react
 
+## 2.0.0
+
+### Major Changes
+
+- Pass an engine factory to `createEngineContext`, for example `createEngineContext(() => new Engine(registry))`. Move engine options and executor or service registration into the factory in place of passing a `Runtime` and options to `createEngineContext`. The graph provider also accepts application editor and node renderer registrations before the canvas mounts.
+
+### Patch Changes
+
+- Updated dependencies [083628d]
+- Updated dependencies
+- Updated dependencies [466bd65]
+- Updated dependencies [083628d]
+- Updated dependencies [083628d]
+- Updated dependencies
+- Updated dependencies [5d248f2]
+  - @lyx-pj/primflow-canvas@2.0.0
+  - @lyx-pj/primflow-engine@2.0.0
+
 ## 1.1.0
 
 ### Minor Changes
