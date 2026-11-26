@@ -64,7 +64,7 @@ graph.removeSwitchCase(node, 'case_2_value')  // 删除端口并清理连线；�
 
 新增序号取已有最大序号加一，删除中间的 case 后不会出现重名端口。
 
-为画布使用的 `NodeRegistry` 注册自定义类型，端口连线会应用注册的类型规则。用 `graph.getTypeDiagnostics()` 检查当前图，或传入一个 `JsonGraph` 检查文件。宿主可以调用 `graph.setNodeProgress(nodeId, text)` 更新节点面板的实时预览。
+为画布使用的 `NodeRegistry` 注册自定义类型，端口连线和节点面板的 JSON 编辑器会应用同一套类型规则。用 `graph.getTypeDiagnostics()` 检查当前图，或传入一个 `JsonGraph` 检查文件。宿主可以调用 `graph.setNodeProgress(nodeId, text)` 更新节点面板的实时预览。
 
 ## 配置界面
 
@@ -319,6 +319,8 @@ graph.nodeRenderers.register('ImageFile', {
 节点面板将注册键显示为定义 ID，并将选中节点自身的 ID 显示为实例 ID。设置自定义标题后，如果它与定义名称不同，面板会在标题下方显示定义名称。循环和子图节点还会显示行为类别。
 
 字符串输入可在定义中指定 `editor: 'select'` 或 `editor: 'textarea'`。连线始终以输出为起点、输入为终点，画布也支持从输入端开始拖拽。
+
+节点面板中的 `array` 和 `object` 输入会打开基于 CodeMirror 6 的 JSON 代码编辑器。编辑器提供行号、JSON 语法高亮、括号配对、查找替换，并在装订线中报告解析错误。停止输入片刻后，修改会写回节点值。JSON 格式无效时保留原值，输入到一半的文档不会破坏节点；形状不匹配的有效 JSON（例如在 `array` 端口上填写对象）同样会被拒绝。
 
 代码编辑器通过 `--bpgraph-panel-*` 变量适配面板主题。编辑器内可用常规快捷键撤销和重做，`Ctrl`/`Cmd` + `F` 打开查找面板。
 

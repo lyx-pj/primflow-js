@@ -64,7 +64,7 @@ graph.removeSwitchCase(node, 'case_2_value')  // Remove ports and links; return 
 
 New indices use the largest existing index plus one, so removing a middle case does not produce duplicate port names.
 
-Register custom types in the canvas `NodeRegistry`. Port connections use the registered type rules. Use `graph.getTypeDiagnostics()` to inspect the current graph, or pass it a `JsonGraph` to inspect a file. Hosts can call `graph.setNodeProgress(nodeId, text)` to update the live preview in the node panel.
+Register custom types in the canvas `NodeRegistry`. Pin connections and the node panel's JSON editor share the type rules. Use `graph.getTypeDiagnostics()` to inspect the current graph, or pass it a `JsonGraph` to inspect a file. Hosts can call `graph.setNodeProgress(nodeId, text)` to update the live preview in the node panel.
 
 ## Configure the UI
 
@@ -376,6 +376,8 @@ The `description` returned by `palette.describe` also appears at the bottom of t
 The node panel shows the registry key as the definition ID and the selected node's own ID as the instance ID. A custom title appears in the heading, with the definition name below when it differs. Loop and subgraph nodes also show their behavior.
 
 String inputs can choose `editor: 'select'` or `editor: 'textarea'`. Links are saved from output to input even when a drag begins at the input.
+
+In the node panel, `array` and `object` inputs open a JSON code editor built on CodeMirror 6. The editor shows line numbers, JSON syntax highlighting, bracket matching, search and replace, and reports parse errors in the gutter. Edits are written back to the node value shortly after typing stops. Invalid JSON keeps the previous value, so a half-typed document never corrupts the node, and a valid document of the wrong shape (an object on an `array` port, for example) is rejected the same way.
 
 The code editor follows the surrounding panel theme through the `--bpgraph-panel-*` variables. Undo and redo work inside the editor with the usual keyboard shortcuts, and the search panel opens with `Ctrl`/`Cmd` + `F`.
 

@@ -1,14 +1,16 @@
 import { html, nothing, type TemplateResult } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
 import { live } from 'lit-html/directives/live.js'
+import { keyed } from 'lit-html/directives/keyed.js'
 import { ifDefined } from 'lit-html/directives/if-defined.js'
-import { isDataPort, type InputPort, type NodeClassType } from '@lyx-pj/primflow-model'
+import { isBuiltinDataType, isDataPort, type InputPort, type NodeClassType } from '@lyx-pj/primflow-model'
 import type { NodeInstanceType } from '../../Graph'
 import type { CanvasGraph, NodePanelOptions, PanelSection, PanelSectionContext, PanelSectionId } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { switchCasePorts } from '../../utils/switchCases'
 import { stopWheel } from '../helpers'
+import { JsonCodeEditor } from './JsonCodeEditor'
 import { executionAttempt, executionPorts, executionStatus } from './executionDetails'
 import { UI_GAP } from '../layout'
 
@@ -43,6 +45,8 @@ export class NodePanel extends OverlayComponent {
   private extraContent: HTMLElement | string | null = null
   private offset = 0
   private compact = false
+  /** JSON editors keyed by input name; kept across re-renders of the same node. */
+  private readonly jsonEditors = new Map<string, JsonCodeEditor>()
   private readonly idPrefix = `bpgraph-node-panel-${++nextNodePanelId}`
 
   private readonly graph: CanvasGraph
@@ -76,6 +80,7 @@ export class NodePanel extends OverlayComponent {
     if (node?.id !== this.node?.id) {
       this.extraNodeId = null
       this.extraContent = null
+      this.destroyJsonEditors()
       // Selecting a node always brings its settings forward, even while closed.
       if (node) this.activeTab = 'node'
     }
@@ -133,7 +138,16 @@ export class NodePanel extends OverlayComponent {
 
   destroy() {
     this.graph.off('node:changed', this.onNodeChanged)
+    this.destroyJsonEditors()
     super.destroy()
+  }
+
+  /** Release every JSON editor instance and remove its DOM. */
+  private destroyJsonEditors() {
+    for (const editor of this.jsonEditors.values()) {
+      editor.destroy()
+    }
+    this.jsonEditors.clear()
   }
 
   private setOpen(next: boolean) {
@@ -145,9 +159,36 @@ export class NodePanel extends OverlayComponent {
     this.onVisibilityChange()
   }
 
+  /**
+   * Get or create the JSON editor for one input.
+   *
+   * The editor owns imperative DOM, so it is created once per input and
+   * reused across panel re-renders. Switching nodes destroys every editor.
+   */
+  private jsonEditor(node: NodeInstanceType, input: InputPort, value: unknown): JsonCodeEditor {
+    const existing = this.jsonEditors.get(input.name)
+    if (existing) {
+      existing.sync(value)
+      return existing
+    }
+    const editor = new JsonCodeEditor(input, value, (next) => {
+      node.inputValues = { [input.name]: next } as unknown as typeof node.inputValues
+    }, this.graph.nodeRegistry.dataTypes)
+    this.jsonEditors.set(input.name, editor)
+    editor.mount()
+    return editor
+  }
+
   private onNodeChanged = (node: NodeInstanceType, change: string) => {
     if (!this.node || this.node.id !== node.id) return
     if (!['inputValues', 'inputs', 'outputs', 'title', 'loop'].includes(change)) return
+    // Values changed outside the editor (undo, graph load); push them back in.
+    if (change === 'inputValues') {
+      const values = node.inputValues || {}
+      for (const [name, editor] of this.jsonEditors) {
+        editor.sync(values[name])
+      }
+    }
     if (this.expanded && this.activeTab === 'node') this.render()
   }
 
@@ -495,6 +536,9 @@ export class NodePanel extends OverlayComponent {
     if (this.graph.nodeRegistry.dataTypes.getStream(input.type)) return html``
     const custom = this.customControl(node, input, value)
     if (custom) return custom
+    if (!isBuiltinDataType(input.type) && this.graph.nodeRegistry.dataTypes.has(input.type)) {
+      return html`${keyed(`${node.id}:${input.name}`, this.jsonEditor(node, input, value).element)}`
+    }
     switch (input.editor ?? input.type) {
       case 'number':
         return html`<input
@@ -512,6 +556,12 @@ export class NodePanel extends OverlayComponent {
           .value=${live(String(value ?? ''))}
           @input=${(evt: Event) => this.setValue(node, input, evt)}
         ></textarea>`
+      case 'array':
+      case 'object':
+        return html`${keyed(
+          `${node.id}:${input.name}`,
+          this.jsonEditor(node, input, value).element
+        )}`
       case 'boolean':
         return html`<input
           class="bpgraph-node-panel-checkbox"

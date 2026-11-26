@@ -90,8 +90,10 @@ checkImports('primflow-canvas', (spec) => {
   if (spec.startsWith('@lyx-pj/primflow-model/')) return '请从 model 的根入口导入，避免深层路径'
   if (spec === '@joint/core') return null
   if (spec === 'lit-html' || spec.startsWith('lit-html/')) return null
+  if (spec.startsWith('@codemirror/')) return null
+  if (spec.startsWith('@lezer/')) return null
   if (spec.startsWith('@lyx-pj/primflow-engine')) return 'canvas 不得依赖 engine（否则运行时状态会渗进画布层）'
-  return 'canvas 只能依赖 model、@joint/core 与 lit-html'
+  return 'canvas 只能依赖 model、@joint/core、lit-html、@codemirror/* 与 @lezer/*'
 })
 
 checkImports('primflow-react', (spec) => {
@@ -178,8 +180,15 @@ checkBundle('primflow-canvas', 'build/index.mjs', (code) => {
   record(specs.includes('@lyx-pj/primflow-model'), 'canvas 产物把 model 作为外部依赖引用')
   record(specs.includes('@joint/core'), 'canvas 产物把 @joint/core 作为外部依赖引用')
   record(specs.some((s) => s === 'lit-html' || s.startsWith('lit-html/')), 'canvas 产物把 lit-html 作为外部依赖引用')
+  record(specs.some((s) => s.startsWith('@codemirror/')), 'canvas 产物把 @codemirror/* 作为外部依赖引用')
   const unexpected = specs.filter(
-    (s) => s !== '@lyx-pj/primflow-model' && s !== '@joint/core' && s !== 'lit-html' && !s.startsWith('lit-html/')
+    (s) =>
+      s !== '@lyx-pj/primflow-model' &&
+      s !== '@joint/core' &&
+      s !== 'lit-html' &&
+      !s.startsWith('lit-html/') &&
+      !s.startsWith('@codemirror/') &&
+      !s.startsWith('@lezer/')
   )
   record(unexpected.length === 0, `canvas 产物无其它外部依赖（发现：${unexpected.join(', ') || '无'}）`)
   record(!/vendor-[\w-]+\.js/.test(code), 'canvas 产物不再产出内联 vendor chunk')

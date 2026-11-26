@@ -6,6 +6,7 @@ import './svg-shim'
 import { afterEach, expect, test, vi } from 'vitest'
 import { html, nothing, render } from 'lit-html'
 import { dia } from '@joint/core'
+import { EditorView } from '@codemirror/view'
 import type { InputPort } from '@lyx-pj/primflow-model'
 import { DataTypeRegistry, defineNode, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
 import { Graph, type NodeInstanceType } from '../src/Graph'
@@ -1076,6 +1077,23 @@ test('node titles show breakpoint indicators and remove them when cleared', () =
  * The editor parses the document and writes the node value after a short
  * delay, so the test must wait past that delay.
  */
+async function waitForJsonEditor() {
+  await new Promise((resolve) => setTimeout(resolve, 500))
+}
+
+/**
+ * Replace the whole editor document.
+ *
+ * The test drives the editor through its public API, so the change goes
+ * through the same transaction path the editor listens to.
+ */
+function setEditorText(editor: HTMLElement, text: string) {
+  const content = editor.querySelector<HTMLElement>('.cm-content')!
+  const view = EditorView.findFromDOM(content)
+  expect(view).toBeTruthy()
+  view!.dispatch({ changes: { from: 0, to: view!.state.doc.length, insert: text } })
+}
+
 function createNodeStub(overrides: Record<string, unknown> = {}) {
   return {
     id: 'node-1',
@@ -1131,6 +1149,122 @@ test('node panel shows the definition name below a custom title', () => {
   expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('定义 ID: subgraph')
   expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('实例 ID: node-42')
   expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('行为类别: 子图')
+})
+
+test.each([
+  { type: 'array', initial: [1], updated: [2] },
+  { type: 'object', initial: { count: 1 }, updated: { count: 2 } },
+])('node panel edits $type ports with the JSON code editor', async ({ type, initial, updated }) => {
+  current = createHarness()
+  const node = createNodeStub({
+    inputs: [{ name: 'value', type, id: 'in-value' }],
+    inputValues: { value: initial },
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  // Structured values use a code editor instead of a plain textarea.
+  const editor = current.container.querySelector<HTMLElement>('.bpgraph-json-editor')!
+  expect(editor).toBeTruthy()
+  expect(editor.dataset.field).toBe('value')
+  expect(current.container.querySelector('textarea[data-field="value"]')).toBeNull()
+
+  // The editor renders a CodeMirror surface with the current value.
+  const content = editor.querySelector('.cm-content')
+  expect(content).toBeTruthy()
+  const view = EditorView.findFromDOM(content as HTMLElement)!
+  expect(view.state.doc.toString()).toBe(JSON.stringify(initial, null, 2))
+  // Opening the editor does not write a value back to the node.
+  expect(node.inputValues.value).toEqual(initial)
+
+  // Editing the document writes the parsed value back to the node.
+  setEditorText(editor, JSON.stringify(updated, null, 2))
+  await waitForJsonEditor()
+  expect(node.inputValues.value).toEqual(updated)
+})
+
+test('node panel highlights JSON tokens in the code editor', () => {
+  current = createHarness()
+  const node = createNodeStub({
+    inputs: [{ name: 'value', type: 'object', id: 'in-value' }],
+    inputValues: { value: { count: 1 } },
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const editor = current.container.querySelector<HTMLElement>('.bpgraph-json-editor')!
+  const content = editor.querySelector('.cm-content')!
+  // The parser wraps JSON tokens in spans so the highlighter can color them.
+  const spans = content.querySelectorAll('span')
+  expect(spans.length).toBeGreaterThan(0)
+  // Property names and values are highlighted separately.
+  const texts = [...spans].map((span) => span.textContent)
+  expect(texts).toContain('"count"')
+  expect(texts).toContain('1')
+})
+
+test('node panel keeps the last valid value while the JSON document is incomplete', async () => {
+  current = createHarness()
+  const node = createNodeStub({
+    inputs: [{ name: 'value', type: 'object', id: 'in-value' }],
+    inputValues: { value: { count: 1 } },
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const editor = current.container.querySelector<HTMLElement>('.bpgraph-json-editor')!
+  setEditorText(editor, '{ "count": ')
+  await waitForJsonEditor()
+  // Invalid JSON does not overwrite the node value.
+  expect(node.inputValues.value).toEqual({ count: 1 })
+})
+
+test('node panel rejects JSON that does not match the port type', async () => {
+  current = createHarness()
+  const node = createNodeStub({
+    inputs: [{ name: 'value', type: 'array', id: 'in-value' }],
+    inputValues: { value: [1] },
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const editor = current.container.querySelector<HTMLElement>('.bpgraph-json-editor')!
+  setEditorText(editor, '{ "count": 1 }')
+  await waitForJsonEditor()
+  // An object does not fit an array port, so the node keeps its value.
+  expect(node.inputValues.value).toEqual([1])
+})
+
+test('node panel releases JSON editors when the selection changes', async () => {
+  current = createHarness()
+  const node = createNodeStub({
+    inputs: [{ name: 'value', type: 'object', id: 'in-value' }],
+    inputValues: { value: { count: 1 } },
+  })
+  const other = createNodeStub({
+    id: 'node-2',
+    inputs: [{ name: 'value', type: 'object', id: 'in-value' }],
+    inputValues: { value: { count: 2 } },
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+  await waitForJsonEditor()
+
+  const panel = current.ui['panel'] as unknown as { jsonEditors: Map<string, unknown> }
+  expect(panel.jsonEditors.size).toBe(1)
+
+  current.adapter.findNode.mockReturnValue(other)
+  current.emitGraph('selection:changed', [other])
+  await waitForJsonEditor()
+
+  // Editors from the previous node are destroyed and replaced.
+  expect(panel.jsonEditors.size).toBe(1)
+  expect(current.container.querySelectorAll('.bpgraph-json-editor')).toHaveLength(1)
 })
 
 test('node descriptions appear below Outputs as plain text with preserved newlines', () => {

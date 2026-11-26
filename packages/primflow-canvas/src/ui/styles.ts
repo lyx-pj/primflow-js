@@ -1202,6 +1202,146 @@ const STYLES = `
   outline: 2px solid var(--bpgraph-focus, #93b4ff);
   outline-offset: 2px;
 }
+/* JSON code editor ----------------------------------------------------- */
+.bpgraph-json-editor {
+  box-sizing: border-box;
+  border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.16));
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.bpgraph-json-editor .cm-editor {
+  max-height: 260px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  background: transparent;
+  color: var(--bpgraph-panel-fg, #e8eaed);
+}
+.bpgraph-json-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.bpgraph-json-editor .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+}
+.bpgraph-json-editor .cm-content {
+  padding: 6px 0;
+  caret-color: var(--bpgraph-panel-accent, #4b9fff);
+}
+.bpgraph-json-editor .cm-gutters {
+  border-right: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.35));
+}
+.bpgraph-json-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 6px 0 8px;
+}
+.bpgraph-json-editor .cm-activeLine {
+  background: rgba(255, 255, 255, 0.05);
+}
+.bpgraph-json-editor .cm-activeLineGutter {
+  background: transparent;
+  color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.7));
+}
+.bpgraph-json-editor .cm-selectionBackground,
+.bpgraph-json-editor .cm-editor .cm-selectionBackground,
+.bpgraph-json-editor .cm-editor.cm-focused .cm-selectionBackground,
+.bpgraph-json-editor .cm-editor ::selection {
+  background: rgba(75, 159, 255, 0.25);
+}
+.bpgraph-json-editor .cm-cursor {
+  border-left-color: var(--bpgraph-panel-accent, #4b9fff);
+}
+.bpgraph-json-editor .cm-placeholder {
+  color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.35));
+}
+/* Syntax colors come from the editor's own highlight style, which CodeMirror
+   scopes to generated class names. */
+/* Diagnostics. */
+.bpgraph-json-editor .cm-lintRange-error {
+  background: rgba(255, 138, 138, 0.16);
+  text-decoration: underline wavy var(--bpgraph-menu-danger, #ff8a8a);
+  text-underline-offset: 3px;
+}
+.bpgraph-json-editor .cm-lintPoint-error {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-radius: 50%;
+  background: var(--bpgraph-menu-danger, #ff8a8a);
+  vertical-align: middle;
+}
+.bpgraph-json-editor .cm-lint-marker-error {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--bpgraph-menu-danger, #ff8a8a);
+}
+.bpgraph-json-editor .cm-lint-marker-error::after {
+  content: '!';
+  display: block;
+  color: #1d2024;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+.bpgraph-json-editor .cm-tooltip {
+  border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.16));
+  border-radius: 4px;
+  background: var(--bpgraph-panel-bg, #1d2024);
+  color: var(--bpgraph-panel-fg, #e8eaed);
+  font-family: inherit;
+  font-size: 11px;
+}
+.bpgraph-json-editor .cm-tooltip .cm-diagnostic {
+  padding: 4px 8px;
+}
+.bpgraph-json-editor .cm-tooltip .cm-diagnostic-error {
+  color: var(--bpgraph-menu-danger, #ff8a8a);
+}
+/* Search panel. */
+.bpgraph-json-editor .cm-panels {
+  background: var(--bpgraph-panel-bg, #1d2024);
+  color: var(--bpgraph-panel-fg, #e8eaed);
+  border-bottom: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
+}
+.bpgraph-json-editor .cm-panels input,
+.bpgraph-json-editor .cm-panels button {
+  font-family: inherit;
+  font-size: 11px;
+  color: inherit;
+}
+.bpgraph-json-editor .cm-panels input {
+  padding: 2px 6px;
+  border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.16));
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.bpgraph-json-editor .cm-panels button {
+  padding: 2px 8px;
+  border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.16));
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+.bpgraph-json-editor .cm-panels button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.bpgraph-json-editor .cm-searchMatch {
+  background: rgba(255, 212, 121, 0.25);
+  outline: 1px solid rgba(255, 212, 121, 0.5);
+}
+.bpgraph-json-editor .cm-searchMatch-selected {
+  background: rgba(255, 212, 121, 0.45);
+}
 .bpgraph-debug-panel {
   position: absolute;
   top: var(--bpgraph-ui-gap);
