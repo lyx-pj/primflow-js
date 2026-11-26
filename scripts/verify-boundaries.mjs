@@ -202,9 +202,13 @@ checkBundle('primflow-react', 'build/index.es.js', (code) => {
   record(!/\bjoint\b/i.test(code), 'react 适配层不含 JointJS')
   const specs = externalImports(code)
   record(specs.includes('@lyx-pj/primflow-canvas'), 'react 适配层把 canvas 作为外部依赖引用')
-  record(specs.includes('@lyx-pj/primflow-engine'), 'react 适配层把 engine 作为外部依赖引用')
+  record(!specs.includes('@lyx-pj/primflow-engine'), 'react 适配层由应用创建引擎，无需在运行时导入 engine')
   record(specs.some((s) => s.startsWith('react/')), 'react 适配层把 react/jsx-runtime 作为外部依赖引用')
   return true
+})
+
+checkBundle('primflow-react', 'build/index.d.ts', (code) => {
+  return externalImports(code).includes('@lyx-pj/primflow-engine')
 })
 
 // ---- 4. 交叉内联：产物不得含对方层的实现特征 ------------------------------

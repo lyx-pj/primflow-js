@@ -2,6 +2,7 @@
   "name": "@lyx-pj/primflow-react",
   "private": false,
   "version": "1.1.0",
+  "description": "React provider and GraphView that bind the Primflow canvas and workflow engine to React components.",
   "type": "module",
   "main": "build/index.es.js",
   "types": "build/index.d.ts",

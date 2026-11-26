@@ -1,21 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-import { Engine, type Runtime, type NodeClassType, type ProcessOptions } from '@lyx-pj/primflow-engine'
+import type { Engine, NodeClassType } from '@lyx-pj/primflow-engine'
 
-export type EngineProviderProps<NodeDefs extends Record<string, NodeClassType>> = {
-  runtime: Runtime<NodeDefs>
-  children: ReactNode
-  options?: ProcessOptions
-}
-
-export function createEngineContext<NodeDefs extends Record<string, NodeClassType>>(
-  runtime: Runtime<NodeDefs>,
-  options?: ProcessOptions
-) {
+export function createEngineContext<NodeDefs extends Record<string, NodeClassType>>(createEngine: () => Engine<NodeDefs>) {
   const EngineContext = createContext<Engine<NodeDefs> | null>(null)
 
   function EngineProvider({ children }: { children: ReactNode }) {
-    // Keep Engine stable across renders to preserve runtime state.
-    const [engine] = useState(() => new Engine(runtime, options))
+    const [engine] = useState(createEngine)
     useEffect(
       () => () => {
         engine.stop()
