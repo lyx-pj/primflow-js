@@ -340,17 +340,17 @@ describe('GitHub Actions 发布快照', () => {
     for (const name of releasePackages) writeJson(`packages/${name}/package.json`, { version: '0.0.7-beta.1' })
     expect(() => readReleaseVersion(root)).toThrow('稳定版本')
   })
-  it('release workflow 仅在创建版本 tag 时校验并发布该提交，再部署 Pages', () => {
+  it('release workflow 校验并发布新建版本 tag 或从 main 指定的 tag，再部署相同提交', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/release.yml'), 'utf8')
     expect(workflow).toContain("tags: ['v*']")
     expect(workflow).not.toMatch(/^\s+branches:/m)
     expect(workflow).toContain("github.ref_type == 'tag'")
     expect(workflow).toContain('github.event.created == true')
-    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).toContain('workflow_dispatch:\n    inputs:\n      release_tag:')
+    expect(workflow).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'")
+    expect(workflow).toContain("format('refs/tags/{0}', inputs.release_tag) || github.sha")
     expect(workflow).toContain('git merge-base --is-ancestor HEAD refs/remotes/origin/main')
-    expect(workflow).toContain('RELEASE_REF: ${{ github.ref_name }}')
-    expect(workflow).toContain('id-token: write')
-    expect(workflow).not.toContain('NODE_AUTH_TOKEN')
+    expect(workflow).toContain('RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}')
     const validate = workflow.indexOf('pnpm exec tsx scripts/validate-release.ts')
     const build = workflow.indexOf('run: pnpm build')
     const publish = workflow.indexOf("pnpm -r --filter './packages/*' --fail-if-no-match publish")
@@ -359,7 +359,17 @@ describe('GitHub Actions 发布快照', () => {
     expect(publish).toBeGreaterThan(build)
     expect(workflow).toContain('--registry https://registry.npmjs.org/')
     expect(workflow).toContain('needs: publish\n    uses: ./.github/workflows/pages.yml')
-    expect(workflow).toContain('release_sha: ${{ github.sha }}')
+    expect(workflow).toContain('release_tag: ${{ inputs.release_tag || github.ref_name }}')
+    expect(workflow).toContain('release_sha: ${{ needs.publish.outputs.release_sha }}')
+  })
+
+  it('npm 发布步骤读入 Actions secret，仅为实际构建的事件提交生成来源证明', () => {
+    const workflow = readFileSync(join(repository, '.github/workflows/release.yml'), 'utf8')
+    expect(workflow).toContain("registry-url: 'https://registry.npmjs.org'")
+    expect(workflow).toContain('NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}')
+    expect(workflow).not.toContain('vars.NPM_TOKEN')
+    expect(workflow).toContain('id-token: write')
+    expect(workflow).toContain('PNPM_CONFIG_PROVENANCE: ${{ github.sha == steps.snapshot.outputs.sha }}')
   })
 
   it.each(releasePackages)('%s 的公开包配置关联 Trusted Publishing 所用的源仓库', (name) => {

@@ -1,9 +1,15 @@
 name: 发布 npm 包
-run-name: 发布 ${{ github.ref_name }} 到 npm
+run-name: 发布 ${{ inputs.release_tag || github.ref_name }} 到 npm
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 要发布的已有版本标签，例如 v2.0.1
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,16 +20,20 @@ concurrency:
 
 jobs:
   publish:
-    if: github.ref_type == 'tag' && github.event.created == true
+    if: >-
+      (github.event_name == 'push' && github.ref_type == 'tag' && github.event.created == true) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write # 生成 npm 来源证明。
+    outputs:
+      release_sha: ${{ steps.snapshot.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -34,6 +44,7 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+          registry-url: 'https://registry.npmjs.org'
 
       - uses: pnpm/action-setup@v6
         with:
@@ -42,19 +53,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: 校验发布 tag 与版本快照
-        run: pnpm exec tsx scripts/validate-release.ts
+        id: snapshot
+        run: |
+          pnpm exec tsx scripts/validate-release.ts
+          printf 'sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         env:
-          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}
 
       - name: 构建库并验证包边界
         run: pnpm build
 
-      - name: 使用 npm Trusted Publishing 发布
+      - name: 发布到 npm
         # 递归发布会跳过已上传的版本，同一个 tag 可以安全重跑。
-        run: >-
-          pnpm -r --filter './packages/*' --fail-if-no-match publish
-          --access public --registry https://registry.npmjs.org/
-          --publish-wait-timeout 120000
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo '::error::请在 GitHub Actions secrets 中配置 NPM_TOKEN。'
+            exit 1
+          fi
+          pnpm -r --filter './packages/*' --fail-if-no-match publish \
+            --access public --registry https://registry.npmjs.org/ \
+            --publish-wait-timeout 120000
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 来源证明使用触发工作流的 SHA，只有它与实际构建提交一致时才启用。
+          PNPM_CONFIG_PROVENANCE: ${{ github.sha == steps.snapshot.outputs.sha }}
 
   pages:
     needs: publish
@@ -64,5 +86,5 @@ jobs:
       pages: write
       id-token: write
     with:
-      release_tag: ${{ github.ref_name }}
-      release_sha: ${{ github.sha }}
+      release_tag: ${{ inputs.release_tag || github.ref_name }}
+      release_sha: ${{ needs.publish.outputs.release_sha }}

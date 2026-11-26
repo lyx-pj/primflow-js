@@ -109,9 +109,9 @@ pnpm dev
 
 ## 发布
 
-在 `main` 执行 `pnpm release`，准备版本并推送发布提交和 tag。[发布工作流](.github/workflows/release.yml) 将四个包发布到 npm，随后部署 GitHub Pages 示例。如果发布失败，重跑同一个 tag 的失败任务，工作流会跳过 npm 上已有的包版本。
+在 `main` 执行 `pnpm release`，准备版本并推送发布提交和 tag。[发布工作流](.github/workflows/release.yml) 将四个包发布到 npm，随后部署 GitHub Pages 示例。如果发布失败，可以重跑失败任务。需要使用更新后的工作流时，从 `main` 手动启动发布工作流并填写已有的 `release_tag`。工作流会跳过 npm 上已有的包版本。
 
-首次发布前，在四个 `@lyx-pj/primflow-*` 包上分别配置 [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/#configuring-trusted-publishing)。选择 GitHub Actions，将组织或用户设为 `lyx-pj`，仓库设为 `primflow-js`，工作流文件名设为 `release.yml`。Environment 留空，并允许 `npm publish`。
+将 `NPM_TOKEN` 保存为 GitHub Actions 仓库 secret。使用对四个 `@lyx-pj/primflow-*` 包拥有写权限的 [npm granular access token](https://docs.npmjs.com/about-access-tokens/)，并启用 Bypass 2FA 以支持非交互发布。工作流仅在 npm 发布步骤将该 secret 传给 pnpm。
 
 ## 许可
 

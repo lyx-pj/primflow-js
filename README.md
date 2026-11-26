@@ -109,9 +109,9 @@ Before running browser tests for the first time, run `pnpm exec playwright insta
 
 ## Publishing
 
-Run `pnpm release` on `main` to prepare the version and push the release commit and tag. The [release workflow](.github/workflows/release.yml) publishes all four packages to npm and then deploys the example to GitHub Pages. If publishing fails, rerun the failed job for the same tag. It skips package versions that npm already has.
+Run `pnpm release` on `main` to prepare the version and push the release commit and tag. The [release workflow](.github/workflows/release.yml) publishes all four packages to npm and then deploys the example to GitHub Pages. If publishing fails, rerun the failed job or start the release workflow from `main` with the existing `release_tag` to use the current workflow. It skips package versions that npm already has.
 
-Before the first release, configure [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/#configuring-trusted-publishing) on each of the four `@lyx-pj/primflow-*` packages. Select GitHub Actions, enter `lyx-pj` as the organization or user, `primflow-js` as the repository, and `release.yml` as the workflow filename. Leave the environment blank and allow `npm publish`.
+Store `NPM_TOKEN` as a GitHub Actions repository secret. Use an [npm granular access token](https://docs.npmjs.com/about-access-tokens/) with write access to the four `@lyx-pj/primflow-*` packages and Bypass 2FA enabled for non-interactive publishing. The workflow passes the secret to pnpm only in the npm publishing step.
 
 ## License
 
