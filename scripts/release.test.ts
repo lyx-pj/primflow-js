@@ -358,6 +358,7 @@ describe('GitHub Actions 发布快照', () => {
     expect(build).toBeGreaterThan(validate)
     expect(publish).toBeGreaterThan(build)
     expect(workflow).toContain('--registry https://registry.npmjs.org/')
+    expect(workflow).toContain('--publish-wait-timeout 600000')
     expect(workflow).toContain('needs: publish\n    uses: ./.github/workflows/pages.yml')
     expect(workflow).toContain('release_tag: ${{ inputs.release_tag || github.ref_name }}')
     expect(workflow).toContain('release_sha: ${{ needs.publish.outputs.release_sha }}')

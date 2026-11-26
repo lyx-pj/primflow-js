@@ -70,9 +70,10 @@ jobs:
             echo '::error::请在 GitHub Actions secrets 中配置 NPM_TOKEN。'
             exit 1
           fi
+          # npm 接受上传后，安装元数据与 tarball 可能需要几分钟才对外可用。
           pnpm -r --filter './packages/*' --fail-if-no-match publish \
             --access public --registry https://registry.npmjs.org/ \
-            --publish-wait-timeout 120000
+            --publish-wait-timeout 600000
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           # 来源证明使用触发工作流的 SHA，只有它与实际构建提交一致时才启用。
