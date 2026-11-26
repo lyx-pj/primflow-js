@@ -369,15 +369,46 @@ describe('Pages 发布快照', () => {
     for (const name of releasePackages) writeJson(`packages/${name}/package.json`, { version: '0.0.7-beta.1' })
     expect(() => readReleaseVersion(root)).toThrow('稳定版本')
   })
-  it('workflow 仅监听版本 tag、保留手动入口并校验 checkout 的快照', () => {
+  it('workflow 自动部署版本 tag 并校验该提交的快照', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
     expect(workflow).toContain("tags: ['v*']")
     expect(workflow).not.toMatch(/^\s+branches:/m)
     expect(workflow).toContain("github.ref_type == 'tag'")
-    expect(workflow).toContain('workflow_dispatch:')
-    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).toContain("github.event.deleted != true")
+    expect(workflow).toContain('|| github.sha }}')
     expect(workflow).toContain('pnpm exec tsx scripts/validate-release.ts')
-    expect(workflow).toContain('RELEASE_REF: ${{ github.ref_name }}')
+  })
+
+  it('workflow 从 main 手动部署时以指定 tag 检出并校验发布快照', () => {
+    const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
+
+    expect(workflow).toContain('workflow_dispatch:\n    inputs:\n      release_tag:')
+    expect(workflow).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_tag != ''")
+    expect(workflow).toContain("format('refs/tags/{0}', inputs.release_tag)")
+    expect(workflow).toContain('RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}')
+  })
+
+  it('Pages 产物在独立的构建任务上传，部署等待构建完成', () => {
+    const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
+    const jobs = workflow.split('\njobs:\n')[1]
+    const [build, deploy] = jobs.split('\n  deploy:\n')
+
+    expect(build).toMatch(/^  build:\n/)
+    expect(build).toContain('uses: actions/upload-pages-artifact@v5')
+    expect(build).not.toContain('uses: actions/deploy-pages@')
+    expect(deploy).toMatch(/^    needs: build$/m)
+    expect(deploy).toContain('uses: actions/deploy-pages@v5')
+    expect(deploy).not.toContain('uses: actions/upload-pages-artifact@')
+  })
+
+  it('Pages 首次部署未返回 URL 时可重试，未恢复的失败产生失败状态', () => {
+    const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
+    const retryCondition = "steps.deployment.outcome == 'failure' && steps.deployment.outputs.page_url == ''"
+
+    expect(workflow).toContain('id: deployment\n        continue-on-error: true')
+    expect(workflow).toContain(`id: deployment_retry\n        if: ${retryCondition}`)
+    expect(workflow).toContain("if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome != 'success'\n        run: exit 1")
+    expect(workflow).toContain('steps.deployment_retry.outputs.page_url || steps.deployment.outputs.page_url')
   })
 })
 

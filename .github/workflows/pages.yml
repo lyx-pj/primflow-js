@@ -1,9 +1,15 @@
 name: 部署示例到 GitHub Pages
+run-name: 部署 ${{ inputs.release_tag || github.ref_name }} 到 GitHub Pages
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 已发布的版本标签，例如 v2.0.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,17 +21,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    if: github.ref_type == 'tag' && github.event.deleted != true
+  build:
+    if: >-
+      (github.event_name == 'push' && github.ref_type == 'tag' && github.event.deleted != true) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_tag != '')
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          # 手动部署使用当前工作流，从已发布的 tag 构建站点内容。
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
 
       - uses: actions/setup-node@v7
         with:
@@ -40,7 +46,7 @@ jobs:
       - name: 校验发布 tag 与版本快照
         run: pnpm exec tsx scripts/validate-release.ts
         env:
-          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}
 
       - name: 构建库并验证包边界
         run: pnpm build
@@ -54,6 +60,29 @@ jobs:
         with:
           path: examples/primflow-react/dist
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment_retry.outputs.page_url || steps.deployment.outputs.page_url }}
+
+    steps:
+      # 允许在部署尚未返回页面 URL 时重试，复用已上传的产物。
       - name: 发布页面
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v5
+
+      - name: 等待后重试部署
+        if: steps.deployment.outcome == 'failure' && steps.deployment.outputs.page_url == ''
+        run: sleep 10
+
+      - name: 重试发布页面
+        id: deployment_retry
+        if: steps.deployment.outcome == 'failure' && steps.deployment.outputs.page_url == ''
+        uses: actions/deploy-pages@v5
+
+      - name: 保留未恢复的发布错误
+        if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome != 'success'
+        run: exit 1
