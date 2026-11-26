@@ -1057,6 +1057,270 @@ const STYLES = `
   height: 100%;
   overflow: hidden;
 }
+.bpgraph-element.is-subgraph-collapsed .bpgraph-node-body,
+.bpgraph-element.is-container-collapsed .bpgraph-node-body {
+  fill-opacity: var(--bpgraph-container-collapsed-body-opacity, var(--bpgraph-subgraph-collapsed-body-opacity, 0.5));
+  stroke-opacity: var(--bpgraph-container-collapsed-body-opacity, var(--bpgraph-subgraph-collapsed-body-opacity, 0.5));
+}
+.bpgraph-subgraph-card {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  color: #fff;
+  font: 12px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* The SVG body stays the hit area; only explicit controls opt back in. */
+  pointer-events: none;
+}
+.bpgraph-subgraph-toggle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: #dbeafe;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.bpgraph-subgraph-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.bpgraph-subgraph-toggle:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+.bpgraph-subgraph-toggle:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+.bpgraph-subgraph-toggle:focus-visible {
+  outline: 2px solid var(--bpgraph-focus, #7dd3fc);
+  outline-offset: -2px;
+}
+.bpgraph-subgraph-toggle svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 140ms ease;
+}
+.bpgraph-subgraph-card:not(.is-collapsed) .bpgraph-subgraph-toggle svg {
+  transform: rotate(90deg);
+}
+.bpgraph-subgraph-title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 26px 0 32px;
+  overflow: hidden;
+  color: var(--bpgraph-subgraph-header-fg, #f0f7ff);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 23px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--bpgraph-subgraph-header-bg, linear-gradient(180deg, rgba(33, 150, 243, 0.24), rgba(33, 150, 243, 0.1)));
+  border-bottom: 1px solid var(--bpgraph-subgraph-header-border, rgba(96, 165, 250, 0.32));
+  text-shadow: none;
+}
+.bpgraph-subgraph-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bpgraph-subgraph-card.is-loop .bpgraph-subgraph-title {
+  color: var(--bpgraph-loop-header-fg, #f5f3ff);
+  background: var(--bpgraph-loop-header-bg, linear-gradient(180deg, rgba(124, 58, 237, 0.30), rgba(124, 58, 237, 0.12)));
+  border-bottom-color: var(--bpgraph-loop-header-border, rgba(167, 139, 250, 0.38));
+}
+.bpgraph-subgraph-card.is-loop .bpgraph-subgraph-toggle {
+  color: #ddd6fe;
+}
+.bpgraph-subgraph-card.is-loop .bpgraph-subgraph-toggle:focus-visible {
+  outline-color: #c4b5fd;
+}
+.bpgraph-loop-glyph {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+}
+.bpgraph-loop-limit {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 5px;
+  overflow: hidden;
+  color: #ede9fe;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(124, 58, 237, 0.24);
+  border: 1px solid rgba(196, 181, 253, 0.30);
+  border-radius: 999px;
+}
+/* The loop card is a preview first; port labels stay available in the node panel. */
+.bpgraph-element.is-loop-card > .bpgraph-port [joint-selector="portLabel"] {
+  display: none;
+}
+.bpgraph-subgraph-preview {
+  position: absolute;
+  /* Keep the title strip on the card body so the preview reads as its own surface. */
+  inset: 24px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+  /* A darker inset canvas separates inner nodes from the card body without leaving the dark theme. */
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.1) 1px, transparent 1.5px) 0 0 / 12px 12px,
+    radial-gradient(120% 90% at 50% 0%, rgba(125, 211, 252, 0.07), transparent 62%),
+    var(--bpgraph-subgraph-preview-bg, rgba(5, 7, 9, 0.55));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    inset 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+.bpgraph-subgraph-preview > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: bpgraph-preview-fade 140ms ease-out;
+}
+.bpgraph-subgraph-card.is-loop .bpgraph-subgraph-preview {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.1) 1px, transparent 1.5px) 0 0 / 12px 12px,
+    radial-gradient(120% 90% at 50% 0%, rgba(167, 139, 250, 0.09), transparent 62%),
+    var(--bpgraph-loop-preview-bg, rgba(5, 7, 9, 0.55));
+  box-shadow:
+    inset 0 0 0 1px rgba(167, 139, 250, 0.12),
+    inset 0 10px 24px rgba(0, 0, 0, 0.45);
+}
+.bpgraph-region-schematic {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+@keyframes bpgraph-preview-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bpgraph-subgraph-preview > svg {
+    animation: none;
+  }
+}
+.bpgraph-subgraph-preview-empty {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+.bpgraph-subgraph-breakpoint {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f87171;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
+}
+.bpgraph-subgraph-card.is-generic {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(180deg, rgba(33, 150, 243, 0.16), rgba(0, 0, 0, 0.12));
+}
+.bpgraph-subgraph-card.is-generic.is-loop {
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.16), rgba(0, 0, 0, 0.12));
+}
+.bpgraph-subgraph-card.is-generic .bpgraph-subgraph-title {
+  position: static;
+  height: auto;
+  padding: 0 12px;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  background: none;
+}
+.bpgraph-subgraph-card.is-generic .bpgraph-subgraph-title-text {
+  overflow: visible;
+  white-space: normal;
+}
+.bpgraph-subgraph-badge {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bpgraph-subgraph-omitted {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 3;
+  padding: 1px 5px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  line-height: 1.4;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.bpgraph-standalone-preview {
+  position: relative;
+  overflow: hidden;
+  pointer-events: none;
+}
+.bpgraph-standalone-preview > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.bpgraph-standalone-preview[data-preview-state="pending"],
+.bpgraph-subgraph-preview[data-preview-state="pending"] {
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+  background-size: 200% 100%;
+  animation: bpgraph-preview-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes bpgraph-preview-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
 .bpgraph-node-panel-scroll {
   flex: 1;
   overflow: auto;

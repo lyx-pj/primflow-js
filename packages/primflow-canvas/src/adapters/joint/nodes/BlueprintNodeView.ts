@@ -4,6 +4,7 @@ import { styleMap } from 'lit-html/directives/style-map.js'
 import { dia } from '@joint/core'
 import type { InputPort } from '@lyx-pj/primflow-model'
 import { BlueprintNode } from './BlueprintNode'
+import { isContainerCardRenderer } from './containerCard'
 import { ensureUiStyles } from '../../../ui/styles'
 import { portEditorTemplate, type PortEditorHandlers } from '../../../ui/portEditors'
 import { renderNodeHeader } from '../../../ui/nodeHeader'
@@ -41,7 +42,10 @@ export class BlueprintNodeView extends dia.ElementView {
     this.listenTo(this.model, 'change:breakpoint', this.renderCustomBody)
     this.listenTo(this.model, 'change:executionStatus change:executionPaused', this.renderExecutionStatus)
     this.listenTo(this.model, 'change:size', this.refreshTitleBar)
-    this.listenTo(this.model, 'change:size', this.renderCustomBody)
+    // A container card changes size when collapsed, and its content depends on that state.
+    this.listenTo(this.model, 'change:size change:collapsed', this.renderCustomBody)
+    // The loop card shows configured iteration and timeout limits.
+    this.listenTo(this.model, 'change:loop', this.renderCustomBody)
     this.listenTo(this.model, 'change:inputs change:outputs', this.applyPortHighlights)
     // Application renderers may depend on node values, ports, or the title.
     this.listenTo(this.model, 'change:values change:title change:inputs change:outputs', this.renderCustomBody)
@@ -156,7 +160,16 @@ export class BlueprintNodeView extends dia.ElementView {
    * class field initializers run, so an arrow field would still be undefined.
    */
   private renderCustomBody() {
+    // A collapsed container card becomes a compact summary; its body turns
+    // translucent so the canvas grid stays visible behind it.
+    const collapsed = Boolean(this.model.get('collapsed'))
+    this.el?.classList.toggle('is-container-collapsed', collapsed)
+    this.el?.classList.toggle('is-subgraph-collapsed', collapsed && this.model.get('kind') === 'subgraph')
     const registration = (this.model as BlueprintNode).get('nodeRenderer')
+    const cardVariant = isContainerCardRenderer(registration) ? registration.containerCard : undefined
+    // The built-in loop card hides port labels, which would otherwise sit on
+    // top of the preview. An application renderer keeps its own choices.
+    this.el?.classList.toggle('is-loop-card', cardVariant === 'loop')
     if (!registration) return
     const root = this.findNode('nodeCustomRoot') as HTMLElement | null
     if (!root) return

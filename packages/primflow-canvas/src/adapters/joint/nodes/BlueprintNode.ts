@@ -1,7 +1,7 @@
 import { dia, util } from '@joint/core'
 import { getTextWidth } from '../Util'
 import { isControlPort, isSpacerPort } from '@lyx-pj/primflow-model'
-import type { InputPort, OutputPort, NodeStyle, NodeExecutionStatus, PortShape } from '@lyx-pj/primflow-model'
+import type { InputPort, OutputPort, NodeStyle, NodeExecutionStatus, PortShape, LoopConfig } from '@lyx-pj/primflow-model'
 import type { EditorRegistry } from '../../../ui/editors'
 import type { NodeRendererRegistration } from '../../../ui/nodeRenderers'
 import { isPortVisible } from '../../../utils/ports'
@@ -9,6 +9,10 @@ import { isPortVisible } from '../../../utils/ports'
 export interface BlueprintNodeAttributes extends dia.Element.Attributes {
   title?: string
   breakpoint?: boolean
+  /** Collapsed presentation for a container card. */
+  collapsed?: boolean
+  /** Loop configuration, shown as a compact summary on the loop card. */
+  loop?: LoopConfig
   executionStatus?: NodeExecutionStatus
   executionPaused?: boolean
   inputs?: readonly InputPort[]

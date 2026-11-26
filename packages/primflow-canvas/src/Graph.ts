@@ -22,6 +22,10 @@ import { BlueprintModel } from './GraphModel'
 import { Util } from './utils'
 import { EditorRegistry } from './ui/editors'
 import { NodeRendererRegistry } from './ui/nodeRenderers'
+import { SubgraphPreviewManager } from './preview/SubgraphPreviewManager'
+import type { SubgraphPreviewCacheAdapter } from './preview/previewCache'
+import { renderThumbnail, type ThumbnailHandle, type ThumbnailOptions } from './preview/renderThumbnail'
+import type { CanvasGraph } from './ui/types'
 import type {
   CanvasExecutionStatus,
   ContextMenuOptions,
@@ -275,6 +279,40 @@ export interface IGraph<NodeDefs extends Record<string, NodeClassType>> {
    *                Use it to preserve parameters when opening subgraph files.
    */
   fromJSON(json: JsonGraph | string, options?: { keepStartPorts?: boolean }): void
+
+  /**
+   * Replace the external-subgraph JSON used by call-card previews.
+   *
+   * The canvas does not read application storage; refresh an entry after
+   * saving that subgraph file and remove it when the file is deleted.
+   */
+  setSubgraphSources(sources: Record<string, JsonGraph> | Map<string, JsonGraph>): void
+
+  /** Update or remove one external-subgraph preview source. */
+  updateSubgraphSource(id: string, json: JsonGraph | null): void
+
+  /**
+   * Install an application-owned cache for rendered card previews.
+   *
+   * The canvas decides when to save or drop entries; the application decides
+   * where they live. Pass `null` to disable persistence and keep the in-memory
+   * cache only. Call `preloadSubgraphPreviews` after setting the adapter.
+   */
+  setSubgraphPreviewCache(adapter: SubgraphPreviewCacheAdapter | null): void
+
+  /**
+   * Load persisted card previews into memory.
+   *
+   * Await this during startup, before restoring a view, so cards can mount
+   * their cached image on the first paint.
+   */
+  preloadSubgraphPreviews(): Promise<void>
+
+  /**
+   * Render any view JSON into a container without modifying the live graph.
+   * Nested subgraph calls use generic cards rather than recursing.
+   */
+  renderThumbnail(json: JsonGraph, container: HTMLElement, options?: ThumbnailOptions): ThumbnailHandle
 }
 
 type GraphEventPayload = {
@@ -356,6 +394,8 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   public readonly editors = new EditorRegistry()
   /** Application-provided node renderers, keyed by definition ID. */
   public readonly nodeRenderers = new NodeRendererRegistry()
+  /** Container card previews; external subgraph sources are supplied by the application. */
+  public readonly subgraphPreviews: SubgraphPreviewManager
   private _defaultScale = 1
   private adapter: GraphAdapter
   private viewDispose?: () => void
@@ -553,6 +593,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     }
     this.adapter = new GraphAdapter(this as unknown as Graph<{}>, options)
     this.model = new BlueprintModel(undefined, undefined, registry.dataTypes)
+    this.subgraphPreviews = new SubgraphPreviewManager(this as unknown as CanvasGraph)
     this.initialize()
   }
 
@@ -591,7 +632,8 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     return this._model
   }
   set model(value: BlueprintModel) {
-    this.reset()
+    // A new model keeps rendered previews so switching views can mount them instantly.
+    this.reset({ keepPreviewCache: true })
     this._model?.setGraph(null)
     this._model = value
     value.setGraph(this as unknown as Graph<{}>)
@@ -722,6 +764,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   public destroy() {
     this.replayBackup = null
     this.replayLabelValue = ''
+    this.subgraphPreviews.destroy()
     this.reset()
     if (this.adapter) this.adapter.destroy()
   }
@@ -797,6 +840,40 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   /** Re-render the right-hand panel content; skipped while closed. */
   public refreshNodePanel() {
     this.adapter?.ui?.refreshNodePanel()
+  }
+
+  /**
+   * Replace the external-subgraph source map used by card previews.
+   *
+   * Applications own storage; the canvas only renders the supplied JSON.
+   */
+  public setSubgraphSources(sources: Record<string, JsonGraph> | Map<string, JsonGraph>) {
+    this.subgraphPreviews.setSources(sources)
+  }
+
+  /** Update or remove one external-subgraph source. */
+  public updateSubgraphSource(id: string, json: JsonGraph | null) {
+    this.subgraphPreviews.updateSource(id, json)
+  }
+
+  /** @inheritdoc {@link IGraph.setSubgraphPreviewCache} */
+  public setSubgraphPreviewCache(adapter: SubgraphPreviewCacheAdapter | null) {
+    this.subgraphPreviews.setCacheAdapter(adapter)
+  }
+
+  /** @inheritdoc {@link IGraph.preloadSubgraphPreviews} */
+  public preloadSubgraphPreviews(): Promise<void> {
+    return this.subgraphPreviews.preload()
+  }
+
+  /**
+   * Render any view JSON into a container.
+   *
+   * The preview never modifies the current graph and does not recurse into
+   * nested subgraph nodes.
+   */
+  public renderThumbnail(json: JsonGraph, container: HTMLElement, options?: ThumbnailOptions): ThumbnailHandle {
+    return renderThumbnail(this as unknown as CanvasGraph, json, container, options)
   }
 
   /** @inheritdoc {@link IGraph.setContainer} */
@@ -1148,12 +1225,16 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   }
 
   public setOptions(options: Partial<GraphOptions> = {}) {
+    const previousLanguage = this.options.language
     this.options = mergeDeep(
       this.options as Record<string, unknown>,
       options
     )
     if (this.adapter) this.adapter.setOptions(this.options)
     if (options.container) this.setContainer(options.container)
+    if (this.subgraphPreviews && options.language !== undefined && options.language !== previousLanguage) {
+      this.subgraphPreviews.invalidate()
+    }
   }
 
   public toString(details: number = 0) {
@@ -1193,6 +1274,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     const model = BlueprintModel.fromJSON(this as unknown as Graph<{}>, json, options)
     this.model.setGraph(null)
     this.model = model
+    this.subgraphPreviews.invalidate()
     this.clearNodeProgress()
     this.emit('type:diagnostics', this.getTypeDiagnostics())
     return this.model
@@ -1206,10 +1288,11 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     this.model.setGraph(this as unknown as Graph<{}>)
   }
 
-  private reset() {
+  private reset(options: { keepPreviewCache?: boolean } = {}) {
     this.clearNodeProgress()
     this.resetNodeExecutionStatuses()
     this.setExecutionStatus('idle')
+    if (this.subgraphPreviews) this.subgraphPreviews.resetSlots({ keepCache: options.keepPreviewCache })
     if (this.model) this.model.clear()
     if (this.adapter) this.adapter.clear()
     this.undoManager.clear()

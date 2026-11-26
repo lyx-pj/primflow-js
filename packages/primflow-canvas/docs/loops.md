@@ -22,6 +22,14 @@ Open the node panel from the toolbar, select the Loop node, and set **Maximum it
 
 Inside the body, connect **Initial value** to use the same input on each iteration, or connect **Iteration input** to use the previous iteration's result. Both ports provide the initial value on the first iteration.
 
+## Card and preview
+
+A Loop node uses the same container card as a subgraph call: 280×180 expanded, 200×56 collapsed, with a top-left toggle whose state is stored as `JsonNode.collapsed` and is not part of undo history. The header uses a violet tint, a 24px chevron, a circular-arrow glyph, and a 12px title. When `maxIterations` or `timeoutMs` is configured, a compact chip on the right shows `×3`, `1.5s`, or `×3 · 1.5s`. Port labels are hidden on the card; the node panel keeps the full labels and types, and ports keep the compact edge layout.
+
+The thumbnail reads the loop body from the current view directly. The live preview renders it in a hidden paper and clones the result into the card, so `LoopEntry`, `LoopReturn`, business nodes, and links keep their canvas appearance. Previews do not recurse; a Loop or subgraph call inside the body renders as a generic card. Collapse, execution-state, breakpoint, and custom node renderer behavior matches subgraph cards.
+
+Loop bodies do not use the application-persisted thumbnail cache: the body and the view are in the same JSON, so persisting a derived SVG would duplicate data. On a cold start without a memory cache, an embedded region first paints a synchronous schematic (up to 80 nodes / 160 links, `data-preview-state="schematic"`), then the live preview replaces it; the memory cache still serves view switches and collapse/expand. Theme the header with `--bpgraph-loop-header-bg`, `--bpgraph-loop-header-fg`, and `--bpgraph-loop-header-border`, and the preview surface with `--bpgraph-loop-preview-bg`. The card root exposes `data-container-card="loop"`. An application renderer registered for `loop` still overrides the built-in card.
+
 ## Saving and loading
 
 - Bodies are saved in their owning graph's `subgraphs`, not as standalone files.
@@ -37,3 +45,5 @@ Inside the body, connect **Initial value** to use the same input on each iterati
 ## Tests
 
 [startNodes.test.ts](../tests/startNodes.test.ts) covers body creation, nesting, serialization, deletion, `isLoopBody`, and protection against deleting entry and return nodes.
+
+[loopCard.test.ts](../tests/loopCard.test.ts) covers the Loop card size, collapse, limit chip, replay disablement, and the generic placeholder; [subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts) and [regionSchematic.test.ts](../tests/regionSchematic.test.ts) cover the embedded first frame and the rule that Loop previews never write the application cache. Browser regression lives in `examples/primflow-react/e2e/loopCard.e2e.ts`.

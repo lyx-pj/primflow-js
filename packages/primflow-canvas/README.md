@@ -475,6 +475,51 @@ graph.setOptions({
 
 `graph.canGoBack()` and `graph.goBack()` exit subgraphs within the current file before delegating to the application's `goBack`. Blank-space right-button double-click, the toolbar back button, context menus, and Esc share this navigation. See [Subgraphs and navigation](docs/subgraphs.md) for return order, save failures, and asynchronous switching.
 
+## Container cards and previews (subgraph / loop)
+
+A `subgraph` call node renders as a fixed-size card instead of a standard node. The expanded card is 280×180, the collapsed card is 200×56, and the top-left control toggles the state. The header uses a blue-tinted bar, a 24px chevron button, and a light 12px title, with a 1px accent border separating it from the preview. The button and title stay on the top edge in both states. When collapsed, the card body becomes translucent so the canvas grid remains visible; override `--bpgraph-container-collapsed-body-opacity` to change it (the older `--bpgraph-subgraph-collapsed-body-opacity` still works). Override `--bpgraph-subgraph-header-bg`, `--bpgraph-subgraph-header-fg`, and `--bpgraph-subgraph-header-border` to retheme the header. Its four ports are compact: execution ports keep the neutral arrow, generic data ports use the slate hexagon, the visual radius is 4 with a 1px outline, and each port centre sits on the card edge so half the dot stays outside. On the collapsed card the two ports on each side sit 24px apart. The collapsed state is saved as `collapsed` on the node JSON and is not part of undo history. During replay the toggle is disabled; previews render from the replay JSON.
+
+A `loop` node reuses the same card size, port layout, and collapse behavior, and double-click still opens the loop body. Its header uses a violet tint, a circular-arrow glyph, and an optional limit chip on the right. The chip appears only when an iteration cap or timeout is configured and shows `×3`, `1.5s`, or `×3 · 1.5s`. Port labels are hidden on the card; the node panel keeps the full labels and types. Retheme the loop header with `--bpgraph-loop-header-bg`, `--bpgraph-loop-header-fg`, and `--bpgraph-loop-header-border`, or the preview surface with `--bpgraph-loop-preview-bg`. The card root exposes `data-container-card="loop"` for application styles. An application renderer registered for the loop definition still overrides the built-in card.
+
+Previews are rendered live from region data in a hidden paper and cloned into the card. Node bodies, titles, ports, inline port controls, custom node renderers, and links are kept as static appearance; breakpoints, execution states, selection, the grid, and panels are excluded. The preview container is inert. Its surface is transparent over the card body, with a subtle rim on built-in node bodies so inner nodes stay readable; set `--bpgraph-subgraph-preview-bg` to add a tinted surface. Loop cards use a violet inset surface.
+
+Previews do not recurse: a subgraph call or loop call inside a preview renders as a generic card. A nested loop uses the generic loop card with a `Loop` badge and no second preview.
+
+The canvas never reads application storage. Embedded subgraphs come from the current graph model. External references need the application to push their JSON:
+
+```ts
+graph.setSubgraphSources({ [fileId]: subgraphJson })
+graph.updateSubgraphSource(fileId, nextSubgraphJson)
+graph.updateSubgraphSource(fileId, null)
+```
+
+Refresh a source after saving that subgraph file and remove it when the file is deleted.
+
+Rendered previews are cached in memory per target and content. A card mounts its last preview immediately, then rebuilds in the background and replaces the image only when the output changed. To keep previews across page reloads, install an application-owned adapter and preload it before restoring a view:
+
+```ts
+graph.setSubgraphPreviewCache({ load, save, remove })
+await graph.preloadSubgraphPreviews()
+```
+
+Only external subgraph sources are persisted; embedded subgraphs and loop bodies stay in memory and never call the application's `save` or `remove`. Storage location, retention, and cleanup belong to the application. See [Subgraphs and navigation](docs/subgraphs.md) for the payload and adapter contract.
+
+On a cold start without a memory cache, an embedded region (an embedded subgraph or loop body) first paints a synchronous structural schematic: up to 80 nodes and 160 links in reading order, with header-coloured rounded blocks, no hidden paper, and no font or image waits. The preview slot reports `data-preview-state="schematic"` until the live preview replaces it. If the live build fails, the schematic stays instead of the empty state. External subgraph references keep the persisted-cache or loading path and do not use this synchronous fallback.
+
+Any view JSON can be rendered into an application-provided container:
+
+```ts
+const handle = graph.renderThumbnail(json, container, { width: 280, height: 180 })
+await handle.ready
+handle.dispose()
+```
+
+`renderThumbnail` never modifies the live graph and does not recurse through nested subgraphs. No thumbnail field is written to graph JSON.
+
+Assets that finish loading within 250ms are captured; images that finish later are not.
+
+Each preview draws at most 200 nodes and 400 links in reading order; links to omitted nodes are dropped and a `+N` badge reports the omitted count. Cards render when visible and keep showing the previous preview while a new one is built.
+
 ## Loop bodies
 
 Adding a `loop` node automatically creates its body, entry, return, and the initial connection from entry to return. Select Loop to set its iteration cap and timeout in the node panel. See [Editing loop bodies](docs/loops.md) for wiring the initial and current iteration inputs.

@@ -418,6 +418,51 @@ graph.setOptions({
 
 `graph.canGoBack()` 和 `graph.goBack()` 会先退出当前文件内的子图，再交给应用的 `goBack`。空白处右键双击、工具栏返回按钮、右键菜单和 Esc 共用这套导航。返回顺序、保存失败和异步切换的处理见 [子图与导航](docs/subgraphs.zh-CN.md)。
 
+## 容器卡片与预览（子图 / 循环）
+
+`subgraph` 调用节点显示为固定尺寸的卡片，而不是普通节点：展开 280×180，折叠 200×56，左上角按钮切换状态。标题栏使用蓝色渐变底、24px 的 chevron 按钮和浅色 12px 标题，并用 1px 强调色边线与预览区分开；展开和折叠状态都保持按钮和标题在卡片顶部；折叠时卡片主体变为半透明，让画布网格透出来，可通过 `--bpgraph-container-collapsed-body-opacity` 调整透明度（旧的 `--bpgraph-subgraph-collapsed-body-opacity` 仍兼容）；标题栏可通过 `--bpgraph-subgraph-header-bg`、`--bpgraph-subgraph-header-fg` 和 `--bpgraph-subgraph-header-border` 调整配色。四个端口使用紧凑样式：执行端口保持中性箭头，通用数据端口使用青灰色六边形，视觉半径 4、描边 1px，端口中心正好落在卡片边缘线上，因此一半在卡片内、一半在卡片外；折叠时同侧两个端口中心相距 24px。折叠状态保存在节点 JSON 的 `collapsed` 字段，不进入撤销记录。回溯期间折叠按钮不可用，预览按回溯 JSON 渲染。
+
+`loop` 节点复用同一套卡片尺寸、端口和折叠逻辑，双击进入循环体。Loop 的 header 使用紫色渐变、圆形箭头图标和右侧可选的上限徽标；徽标只在配置了循环上限或超时时出现，显示 `×3`、`1.5s` 或 `×3 · 1.5s`。卡片上隐藏端口标签，完整标签与类型仍在节点面板显示。Loop header 可通过 `--bpgraph-loop-header-bg`、`--bpgraph-loop-header-fg` 和 `--bpgraph-loop-header-border` 调整配色，预览底色通过 `--bpgraph-loop-preview-bg` 调整；卡片根节点上的 `data-container-card="loop"` 可用于应用样式。自定义 Loop 渲染器仍优先于内置卡片。
+
+预览在隐藏的 paper 中按区域数据现场渲染，再克隆进卡片。节点主体、标题、端口、内联端口控件、自定义节点渲染器和连线保留为静态外观；断点、执行状态、选中、网格和面板不进入预览。预览容器不可交互。预览区是标题条下方的深色内嵌画布，带细点阵和节点微光描边，因此深色主题下内部节点也能和卡片背景区分开；可通过 `--bpgraph-subgraph-preview-bg` 调整底色，Loop 使用紫色内嵌底色。
+
+预览不会递归：预览里的子图调用和 Loop 调用都画成通用卡；Loop 通用卡带 `Loop` 徽标，不挂第二层预览。
+
+画布不读取应用存储。内嵌子图直接来自当前图模型；外部引用需要应用推送 JSON：
+
+```ts
+graph.setSubgraphSources({ [fileId]: subgraphJson })
+graph.updateSubgraphSource(fileId, nextSubgraphJson)
+graph.updateSubgraphSource(fileId, null)
+```
+
+保存子图文件后刷新对应 source，删除文件时移除。
+
+渲染结果按目标和内容缓存在内存中。卡片会先挂载上一张预览图，再在后台重新渲染，只有输出变化时才替换。若要在刷新页面后仍显示缩略图，应用需要提供持久化适配器，并在恢复视图前预加载：
+
+```ts
+graph.setSubgraphPreviewCache({ load, save, remove })
+await graph.preloadSubgraphPreviews()
+```
+
+只有外部子图 source 会持久化；内嵌子图和循环体只进入内存缓存，永远不会调用应用的 `save` / `remove`。存储位置、保留策略和清理由应用负责，适配器契约见[子图与导航](docs/subgraphs.zh-CN.md)。
+
+内嵌区域（内嵌子图与循环体）在冷启动、没有内存缓存时，会先同步绘制一张结构示意图：按阅读顺序最多 80 个节点、160 条连线，节点用 header 色画成圆角块，不创建隐藏 paper、不等待字体和图片。此时预览区为 `data-preview-state="schematic"`；高清预览在后台生成后替换它。示意图构建失败时保留示意图，不显示「暂无预览」。外部子图 reference 仍使用持久化缓存或加载态，不进入这条同步路径。
+
+任意视图 JSON 都可以渲染到应用提供的容器：
+
+```ts
+const handle = graph.renderThumbnail(json, container, { width: 280, height: 180 })
+await handle.ready
+handle.dispose()
+```
+
+`renderThumbnail` 不修改当前图，也不会递归渲染嵌套子图。图 JSON 不写入缩略图字段。
+
+250ms 内加载完成的资源会进入预览，之后才完成的图片不会。
+
+每个预览最多绘制 200 个节点、400 条连线，按阅读顺序截断；指向被截断节点的连线丢弃，省略节点数显示为 `+N`。卡片进入视口才渲染，新预览构建期间继续显示上一张预览。
+
 ## 循环体
 
 添加 `loop` 节点时，画布会自动创建循环体、循环入口和循环返回，并连好入口到返回的初始连线。单击 Loop 节点可在节点面板设置次数上限和超时。初始输入和本轮迭代输入的连法见 [循环体的编辑](docs/loops.zh-CN.md)。

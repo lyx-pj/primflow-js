@@ -4,10 +4,13 @@ import { BlueprintNodeView } from './nodes/BlueprintNodeView'
 import { ScrollerController } from './ScrollerController'
 import { SelectionController } from './SelectionController'
 import { GroupEffectController } from './GroupEffectController'
+import { createSubgraphCardRenderer } from './nodes/subgraphCard'
+import { createLoopCardRenderer } from './nodes/loopCard'
 import type { GraphAdapter } from '..//GraphAdapter'
 import type { NodeInstanceType } from '../../Graph'
 import type { NodeStyle, LinkStyle } from '@lyx-pj/primflow-model'
 import type { LinkEnds, LinkInstanceType } from '../../Graph'
+import type { CanvasGraph } from '../../ui/types'
 
 config.classNamePrefix = 'bpgraph-'
 
@@ -216,10 +219,19 @@ export class JointGraph implements IJointGraph {
   public addNode(instance: NodeInstanceType, style?: NodeStyle) {
     const inputs = instance.inputs
     const outputs = instance.outputs
+    const appRenderer = this.adapter.graph.nodeRenderers.get(instance.definitionId)
+    // Container call nodes use a card unless the application registered its own renderer.
+    const nodeRenderer = appRenderer ?? (instance.kind === 'subgraph'
+      ? createSubgraphCardRenderer(this.adapter.graph as unknown as CanvasGraph, instance)
+      : instance.kind === 'loop'
+        ? createLoopCardRenderer(this.adapter.graph as unknown as CanvasGraph, instance)
+        : undefined)
+
     const node = new custom.BlueprintNode({
       id: instance.id,
       title: instance.title ?? '',
       breakpoint: instance.breakpoint,
+      collapsed: instance.collapsed,
       executionStatus: this.adapter.graph.getNodeExecutionStatus(instance.id),
       executionPaused: this.adapter.graph.pausedNodeId === instance.id,
       position: { x: instance.position?.x ?? 0, y: instance.position?.y ?? 0 },
@@ -228,8 +240,9 @@ export class JointGraph implements IJointGraph {
       outputs: outputs,
       kind: instance.kind,
       values: { ...instance.inputValues },
+      loop: instance.loop,
       editors: this.adapter.graph.editors,
-      nodeRenderer: this.adapter.graph.nodeRenderers.get(instance.definitionId),
+      nodeRenderer,
     }) as BlueprintNode
     this.graph.addCell(node)
     return node

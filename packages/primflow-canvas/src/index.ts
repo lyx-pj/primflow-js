@@ -85,3 +85,7 @@ export type {
   JsonVariable,
   JsonGraph
 } from '@lyx-pj/primflow-model'
+
+export type { ThumbnailHandle, ThumbnailOptions } from './preview/renderThumbnail'
+export type { SubgraphPreviewManager } from './preview/SubgraphPreviewManager'
+export type { CachedSubgraphPreview, SubgraphPreviewCacheAdapter } from './preview/previewCache'

@@ -28,6 +28,7 @@ export function serializeNodes(nodes: NodeInstanceType[]): JsonNode[] {
     }
     if (node.data !== undefined) jsonNode.data = structuredClone(node.data)
     if (node.breakpoint) jsonNode.breakpoint = true
+    if (node.collapsed) jsonNode.collapsed = true
     if (node.states.title !== undefined) jsonNode.title = node.states.title
     if (node.states.style) jsonNode.style = node.states.style
     if (node.targetGraphId !== undefined) jsonNode.targetGraphId = node.targetGraphId
@@ -128,6 +129,7 @@ export function deserializeNodes(graph: Graph, jsonNodes: JsonNode[]): NodeInsta
       inputValues: { ...jsonNode.inputValues },
       id: jsonNode.id,
       breakpoint: jsonNode.breakpoint,
+      collapsed: jsonNode.collapsed,
       style: jsonNode.style,
       targetGraphId: jsonNode.targetGraphId,
       loop: jsonNode.loop,

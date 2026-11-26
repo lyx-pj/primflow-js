@@ -40,6 +40,51 @@ graph.setOptions({
 
 应用负责保存修改、处理异步切换失败并刷新导航选项；卸载时传入 `navigation: null` 解除回调。导航路径不写入图 JSON、文件存储或撤销栈。返回时先退出文件内的内嵌层级，到文件根层级再交给应用；应用在返回成功后消费一层来源路径，并恢复仍存在的来源内嵌区域；保存失败不切换、不消费路径，目标加载失败保留原存档并暂停自动保存。
 
+## 容器卡片与预览（子图 / 循环）
+
+子图调用节点显示为固定卡片：展开 280×180，折叠 200×56。标题栏使用蓝色渐变底、24px 的 chevron 按钮和浅色 12px 标题，并用 1px 强调色边线与预览区分开；展开和折叠状态都保持按钮和标题在卡片顶部；折叠时卡片主体变为半透明，让画布网格透出来，可通过 `--bpgraph-container-collapsed-body-opacity` 调整透明度（旧的 `--bpgraph-subgraph-collapsed-body-opacity` 仍兼容）；标题栏可通过 `--bpgraph-subgraph-header-bg`、`--bpgraph-subgraph-header-fg` 和 `--bpgraph-subgraph-header-border` 调整配色。左上角按钮切换状态，状态保存在 `JsonNode.collapsed`；切换会发出普通变更事件供自动保存，但不进入撤销记录。回溯期间折叠按钮不可用，预览使用回溯 JSON。预览是现场渲染：画布在隐藏 paper 中渲染目标子图，再把 DOM 克隆进卡片，因此自定义节点渲染器、端口、内联端口控件和连线保持画布外观。断点、执行状态、选中、网格和面板不进入预览，预览容器不可交互。
+
+Loop 节点复用同一套卡片尺寸、端口和折叠逻辑，header 使用紫色渐变、圆形箭头图标和可选的循环上限徽标；卡片上隐藏端口标签，完整标签仍在节点面板显示。Loop 的主题变量为 `--bpgraph-loop-header-bg`、`--bpgraph-loop-header-fg`、`--bpgraph-loop-header-border` 和 `--bpgraph-loop-preview-bg`，卡片根节点带 `data-container-card="loop"`。应用注册的 `loop` renderer 仍优先于内置卡片。
+
+卡片的四个端口使用紧凑样式：执行端口保持中性箭头，通用数据端口使用默认的青灰色六边形，视觉半径为 4、描边 1px，端口中心正好落在卡片边缘线上，因此一半在卡片内、一半在卡片外。折叠时同侧两个端口中心相距 24px，不会互相重叠。
+
+预览区是标题条下方的深色内嵌画布，带细点阵、内描边，并给内置节点主体加了一圈微光描边，因此深色主题下内部节点也能和卡片背景区分开。可通过 `--bpgraph-subgraph-preview-bg` 调整底色。连线颜色来自节点注册表或单条连线配置，未配置时使用画布默认值。
+
+预览不会递归。预览里的子图调用和 Loop 调用都画成通用卡，保留标题、标记、端口和随折叠态变化的尺寸；Loop 通用卡带 `Loop` 徽标。
+
+画布不读取存储。内嵌子图直接读当前图模型；外部引用需要应用推送 JSON：
+
+```ts
+graph.setSubgraphSources({ [fileId]: subgraphJson })
+graph.updateSubgraphSource(fileId, nextSubgraphJson)
+graph.updateSubgraphSource(fileId, null)
+```
+
+应用在保存子图文件后刷新对应 source，删除文件时移除。source 缺失时显示空预览。
+
+渲染结果按目标和内容缓存在内存中。卡片会先挂载该目标上一张预览图，同时在后台重新渲染；只有输出发生变化时才替换。因此切换视图时首帧就能看到缩略图，而不是空状态。缓存版本不兼容、SVG 标记无效或目标已不存在的条目会被忽略。
+
+内嵌区域（内嵌子图与循环体）在冷启动、没有内存缓存时，会先同步绘制结构示意图：按阅读顺序最多 80 个节点、160 条连线，节点用 header 色画成圆角块，不创建隐藏 paper，也不等待字体和图片。此时预览区为 `data-preview-state="schematic"`；高清预览生成后替换它，构建失败时保留示意图而不是空状态。外部子图 reference 仍使用持久化缓存或加载态。
+
+持久化是可选的，由应用负责。画布不直接读取存储；应用设置适配器，并在恢复视图前预加载：
+
+```ts
+graph.setSubgraphPreviewCache({
+  load: () => readPreviews(), // Record<targetId, CachedSubgraphPreview>
+  save: (targetId, preview) => writePreview(targetId, preview),
+  remove: (targetId) => deletePreview(targetId),
+})
+await graph.preloadSubgraphPreviews()
+```
+
+`load()` 可以是异步的：在启动阶段、第一张卡片渲染前 `await preloadSubgraphPreviews()`。只有外部子图 source 会持久化；内嵌子图和循环体属于当前视图，只进入内存缓存，不会调用应用的 `save` / `remove`。存储位置、保留策略和清理都由应用决定；source 被删除时画布会调用 `remove`。source 内容刷新后，上一张持久化预览会保留到下一次渲染替换它。
+
+任意视图 JSON 都可以用 `graph.renderThumbnail(json, container, options)` 渲染，返回 `{ ready, dispose }`，不修改当前图。图 JSON 没有缩略图字段。
+
+250ms 内加载完成的资源会进入预览，之后才完成的图片不会。
+
+单个预览最多绘制 200 个节点、400 条连线，按阅读顺序截断；悬空连线丢弃，省略节点数显示为 `+N`。卡片进入视口才渲染，新预览构建期间继续显示上一张预览。
+
 ## 容器节点的面板
 
 节点面板由工具栏按钮控制，默认打开；选中容器节点（内嵌子图与外部子图引用）不会自动弹出面板。面板已经打开时，选中容器节点会显示它的设置；双击进入子图或循环体后，面板保持打开并回到视图总览，直到在新视图中选中节点。外部子图异步切换失败时，面板不依赖加载结果，保持当前内容。
@@ -49,4 +94,6 @@ graph.setOptions({
 - [startNodes.test.ts](../tests/startNodes.test.ts)：内嵌子图创建、Start 端口保留、保存加载。
 - [viewport.test.ts](../tests/viewport.test.ts)、[ui.test.ts](../tests/ui.test.ts)：返回导航、菜单与面板交互。
 - [replay.test.ts](../tests/replay.test.ts)：回溯期间禁止导航、退出后恢复编辑图。
+- [subgraphCard.test.ts](../tests/subgraphCard.test.ts)、[loopCard.test.ts](../tests/loopCard.test.ts)、[previewGraph.test.ts](../tests/previewGraph.test.ts)、[renderThumbnail.test.ts](../tests/renderThumbnail.test.ts)：卡片、折叠状态、Loop 变体、预览截断和缩略图 API。
 - [previewCache.test.ts](../tests/previewCache.test.ts)、[subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts)、[regionSchematic.test.ts](../tests/regionSchematic.test.ts)：缓存 key、持久化数据校验、内嵌区域首帧示意图、缓存即时挂载和后台校验。
+- `examples/primflow-react/e2e/subgraphPreview.e2e.ts`、`examples/primflow-react/e2e/loopCard.e2e.ts`：现场预览、自定义渲染器、端口控件、嵌套通用卡、折叠持久化和刷新后的缓存预览。

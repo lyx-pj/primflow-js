@@ -2,6 +2,7 @@ import { JointGraph } from './joint/JointGraph'
 import { type GraphOptions, Graph, type NodeInstanceType, type LinkInstanceType, type LinkEnds } from '../Graph'
 import type { InputPort, OutputPort, NodeStyle, LinkStyle, NodeExecutionStatus } from '@lyx-pj/primflow-model'
 import { BlueprintNode } from './joint/nodes/BlueprintNode'
+import { isContainerCardRenderer, containerCardSize } from './joint/nodes/containerCard'
 import { dia, mvc } from '@joint/core'
 import { EventEmitter, mergeDeep } from '@lyx-pj/primflow-model'
 import { KeyboardManager } from '../utils/KeyboardManager'
@@ -550,6 +551,19 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       switch (change) {
         case 'breakpoint':
           (jointCell as BlueprintNode).set('breakpoint', node.breakpoint)
+          break
+        case 'collapsed': {
+          const jointNode = jointCell as BlueprintNode
+          jointNode.set('collapsed', node.collapsed)
+          const renderer = jointNode.get('nodeRenderer')
+          if (isContainerCardRenderer(renderer)) renderer.size = containerCardSize(node.collapsed)
+          jointNode.updateSizeByContent()
+          jointNode.buildPortItems()
+          node._bbox = this.getElementBBox(this.joint.paper.findViewByModel(jointCell) as dia.ElementView)
+          break
+        }
+        case 'loop':
+          (jointCell as BlueprintNode).set('loop', node.loop)
           break
         case 'position':
           jointCell.position(node.position.x, node.position.y)
