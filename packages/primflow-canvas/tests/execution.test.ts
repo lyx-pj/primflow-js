@@ -55,6 +55,24 @@ test('node titles omit status text and icons while preserving breakpoint indicat
   document.body.innerHTML = ''
 })
 
+test('failure, cancellation, skipped branches, and interruptions have distinct labeled halos', () => {
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  const statuses = [
+    ['failed', 'Failed'],
+    ['cancelled', 'Cancelled'],
+    ['skipped', 'Skipped'],
+    ['interrupted', 'Waiting for external input'],
+    ['pending', 'Paused at breakpoint'],
+  ] as const
+  const gradients = statuses.map(([status, label]) => {
+    renderNodeExecution(group, { id: 'effects', status, paused: status === 'pending', width: 200, height: 100, radius: 6 })
+    expect(group.getAttribute('aria-label')).toBe(label)
+    expect(group.querySelector('.bpgraph-node-execution-halo')).toBeTruthy()
+    return [...group.querySelectorAll('stop')].map((stop) => stop.getAttribute('stop-color')).join(',')
+  })
+  expect(new Set(gradients).size).toBe(statuses.length)
+})
+
 test('node views track status and size changes and clear glows on stop', () => {
   const model = new dia.Element({ size: { width: 200, height: 100 } })
   const view = new BlueprintNodeView({ model })

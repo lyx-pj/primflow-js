@@ -1,11 +1,9 @@
 import { html, nothing, type TemplateResult } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
-import type { NodeExecutionStatus } from '@lyx-pj/primflow-model'
 import type {
   CanvasGraph,
-  DebugChainItem,
-  DebugChainKind,
   DebugLogEntry,
+  DebugLogLevel,
   DebugPanelData,
   DebugPanelOptions,
   DebugRecord,
@@ -14,33 +12,17 @@ import type {
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopWheel } from '../helpers'
+import { UI_GAP } from '../layout'
 
 const recordStatusLabels: Record<DebugRecordStatus, string> = {
   waiting: 'Waiting',
   running: 'Running',
   paused: 'Paused',
+  interrupted: 'Waiting for external input',
   completed: 'Completed',
   failed: 'Failed',
   cancelled: 'Cancelled',
 }
-
-const chainStatusLabels: Record<NodeExecutionStatus, string> = {
-  idle: 'Idle',
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Completed',
-}
-
-/** Role labels for subgraph-related nodes in the execution chain. */
-const chainKindLabels: Record<DebugChainKind, string> = {
-  node: 'Node',
-  subgraph: 'Subgraph',
-  'subgraph-start': 'Subgraph entry',
-  'subgraph-end': 'Subgraph exit',
-}
-
-/** Indentation pixels per subgraph level. */
-const CHAIN_INDENT = 14
 
 /** Only finished records have final snapshots available for replay. */
 const finishedRecordStatuses: ReadonlySet<DebugRecordStatus> = new Set(['completed', 'failed', 'cancelled'])
@@ -53,9 +35,13 @@ const logLevelLabels = {
   error: 'Error',
 } as const
 
-/** Right-hand debug panel displaying application-supplied records, chains, and logs. */
+/** Indentation pixels per subgraph level. */
+const SCOPE_INDENT = 12
+
+/** Right-hand debug panel displaying application-supplied records and log stream. */
 export class DebugPanel extends OverlayComponent {
   private expanded = false
+  private compact = false
   private readonly graph: CanvasGraph
   private readonly options: () => DebugPanelOptions | null
   private readonly onVisibilityChange: () => void
@@ -86,6 +72,13 @@ export class DebugPanel extends OverlayComponent {
 
   isOpen() {
     return this.expanded
+  }
+
+  /** Docked sheet below the toolbar in the compact layout. */
+  setCompact(compact: boolean) {
+    if (this.compact === compact) return
+    this.compact = compact
+    if (this.expanded) this.render()
   }
 
   open() {
@@ -135,16 +128,18 @@ export class DebugPanel extends OverlayComponent {
     const data = this.readData()
     this.commit(html`
       <aside
-        class="bpgraph-debug-panel"
+        class=${`bpgraph-debug-panel${this.compact ? ' is-compact' : ''}`}
         role="region"
         aria-label=${this.t('Debug panel')}
-        style=${styleMap({ width: `${this.width}px` })}
+        style=${styleMap(this.compact
+          ? { width: 'auto', left: `${UI_GAP}px` }
+          : { width: `${this.width}px` })}
         @wheel=${stopWheel}
       >
         <header class="bpgraph-debug-panel-header">
           <div>
             <h2 class="bpgraph-debug-panel-title">${this.t('Debug panel')}</h2>
-            <p class="bpgraph-debug-panel-subtitle">${this.t('Records · Execution chain · Logs')}</p>
+            <p class="bpgraph-debug-panel-subtitle">${this.t('Records · Execution log')}</p>
           </div>
           <button
             type="button"
@@ -156,7 +151,7 @@ export class DebugPanel extends OverlayComponent {
           </button>
         </header>
         <div class="bpgraph-debug-panel-scroll">
-          ${this.recordsSection(data.records)} ${this.chainSection(data.chain)} ${this.logsSection(data.logs)}
+          ${this.recordsSection(data.records)} ${this.logsSection(data.logs)}
         </div>
       </aside>
     `)
@@ -225,50 +220,6 @@ export class DebugPanel extends OverlayComponent {
     options.onRecordSelect(options.activeRecordId === record.id ? null : record)
   }
 
-  private chainSection(chain: readonly DebugChainItem[]) {
-    return html`
-      <section class="bpgraph-debug-panel-section" aria-label=${this.t('Execution chain')}>
-        <h3 class="bpgraph-debug-panel-section-title">
-          ${this.t('Execution chain')}<span>${chain.length}</span>
-        </h3>
-        ${chain.length > 0
-          ? html`<ol class="bpgraph-debug-chain">
-              ${chain.map((item, index) => this.chainTemplate(item, index))}
-            </ol>`
-          : html`<p class="bpgraph-debug-panel-empty">${this.t('No execution chain')}</p>`}
-      </section>
-    `
-  }
-
-  private chainTemplate(item: DebugChainItem, index: number): TemplateResult {
-    const status = item.status ?? 'idle'
-    const kind = item.kind ?? 'node'
-    // Indent subgraph nodes by level to distinguish them from main graph nodes.
-    const depth = item.scope?.depth ?? 0
-    return html`
-      <li
-        class=${`bpgraph-debug-chain-item is-${status} is-${kind}`}
-        style=${styleMap({
-          paddingLeft: `${depth * CHAIN_INDENT}px`,
-          '--bpgraph-chain-depth': String(depth),
-        })}
-      >
-        <span class="bpgraph-debug-chain-index" aria-hidden="true">${index + 1}</span>
-        <div class="bpgraph-debug-chain-body">
-          <strong>${this.nodeLabel(item)}</strong>
-          ${kind === 'node'
-            ? nothing
-            : html`<span class=${`bpgraph-debug-chain-tag is-${kind}`} title=${item.scope?.title ?? item.label ?? ''}>
-                ${this.t(chainKindLabels[kind])}
-              </span>`}
-          <span class=${`bpgraph-debug-status is-${status}`}>
-            ${this.t(chainStatusLabels[status]) ?? status}
-          </span>
-        </div>
-      </li>
-    `
-  }
-
   private logsSection(logs: readonly DebugLogEntry[]) {
     return html`
       <section class="bpgraph-debug-panel-section" aria-label=${this.t('Logs')}>
@@ -285,16 +236,23 @@ export class DebugPanel extends OverlayComponent {
   }
 
   private logTemplate(entry: DebugLogEntry): TemplateResult {
-    const level = entry.level ?? 'info'
-    const nodeLabel = entry.nodeId ? this.nodeLabel({ nodeId: entry.nodeId }) : ''
+    const level: DebugLogLevel = entry.level ?? 'info'
+    const nodeLabel = entry.nodeId ? this.nodeLabel(entry.nodeId) : ''
     // Prefix subgraph logs with [subgraph name] to distinguish their source.
     const scopeLabel = entry.scope?.title ? `[${entry.scope.title}]` : ''
     // Render logs on one line and expose full messages through title.
     const fullText = [scopeLabel, nodeLabel, entry.message].filter(Boolean).join(' · ')
+    // Subgraph entries are indented so nested runs stay readable.
+    const depth = entry.scope?.depth ?? 0
     return html`
-      <li class=${`bpgraph-debug-log is-${level}`}>
+      <li
+        class=${`bpgraph-debug-log is-${level}${entry.type ? ` is-${entry.type.replace(/[^a-z-]/gi, '-')}` : ''}`}
+        style=${styleMap({ paddingLeft: `${depth * SCOPE_INDENT}px` })}
+      >
         <span class="bpgraph-debug-log-time">${formatTime(entry.time)}</span>
-        <span class="bpgraph-debug-log-level">${this.t(logLevelLabels[level]) ?? level}</span>
+        ${entry.type
+          ? html`<span class="bpgraph-debug-log-type" title=${entry.type}>${entry.type}</span>`
+          : html`<span class="bpgraph-debug-log-type is-plain">${this.t(logLevelLabels[level]) ?? level}</span>`}
         <span class="bpgraph-debug-log-message" title=${fullText}>
           ${scopeLabel
             ? html`<span class="bpgraph-debug-log-scope">${scopeLabel}</span>`
@@ -308,11 +266,10 @@ export class DebugPanel extends OverlayComponent {
     `
   }
 
-  /** Nodes may belong to subgraphs or be deleted; prefer application-supplied titles. */
-  private nodeLabel(item: DebugChainItem) {
-    if (item.label) return item.label
+  /** Nodes may belong to subgraphs or be deleted; prefer the canvas node title. */
+  private nodeLabel(nodeId: string) {
     // Search all subgraphs for titles of nodes outside the currently displayed graph.
-    return this.graph.findNodeAnywhere(item.nodeId)?.title ?? item.nodeId
+    return this.graph.findNodeAnywhere(nodeId)?.title ?? nodeId
   }
 
   private readData(): Required<DebugPanelData> {
@@ -327,7 +284,6 @@ export class DebugPanel extends OverlayComponent {
     return {
       records: data?.records ?? [],
       logs: data?.logs ?? [],
-      chain: data?.chain ?? [],
     }
   }
 }

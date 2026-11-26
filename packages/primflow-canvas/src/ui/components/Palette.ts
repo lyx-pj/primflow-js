@@ -2,13 +2,19 @@ import { html, nothing } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
 import { createRef, ref } from 'lit-html/directives/ref.js'
 import type { NodeClassType, NodeOptions } from '@lyx-pj/primflow-model'
-import type { NodeInstanceType } from '../../Graph'
+import type { LinkInstanceType, NodeInstanceType } from '../../Graph'
 import type { GraphAdapter } from '../../adapters/GraphAdapter'
 import type { CanvasGraph, PaletteItemDescription, PaletteOptions } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopEvent, stopWheel } from '../helpers'
 import { PaletteTooltip } from './PaletteTooltip'
+import {
+  connectionEnds,
+  findCompatiblePort,
+  type ConnectionPort,
+  type PaletteConnectionRequest,
+} from '../connectionTargets'
 
 type Point = { x: number; y: number }
 type PaletteDefaults = Omit<NodeOptions<NodeClassType>, 'position'>
@@ -18,6 +24,11 @@ type PaletteItem = PaletteItemDescription & {
   category: string
   /** Entry defaults take precedence over global defaults. */
   defaults?: PaletteDefaults
+}
+
+type ConnectionItem = PaletteItem & {
+  candidate: NodeInstanceType
+  port: ConnectionPort
 }
 
 type PaletteDrag = {
@@ -35,6 +46,8 @@ export class Palette extends OverlayComponent {
   private category: string | null = null
   private hidden = false
   private drag: PaletteDrag | null = null
+  private connection: PaletteConnectionRequest | null = null
+  private connectionItems: ConnectionItem[] | null = null
   private readonly searchRef = createRef<HTMLInputElement>()
   private readonly panelRef = createRef<HTMLDivElement>()
   private readonly tooltip: PaletteTooltip
@@ -44,6 +57,7 @@ export class Palette extends OverlayComponent {
   private readonly options: () => PaletteOptions | null
 
   refreshLanguage() {
+    this.connectionItems = null
     this.render()
   }
 
@@ -59,7 +73,26 @@ export class Palette extends OverlayComponent {
     return this.open
   }
 
+  isConnectionMode() {
+    return this.connection !== null
+  }
+
   openAt(clientX?: number, clientY?: number) {
+    this.discardPendingLink()
+    this.connection = null
+    this.connectionItems = null
+    this.openAtPoint(clientX, clientY)
+  }
+
+  openForConnection(request: PaletteConnectionRequest) {
+    this.discardPendingLink()
+    this.connection = request
+    this.connectionItems = null
+    this.openAtPoint(request.clientX, request.clientY)
+  }
+
+  private openAtPoint(clientX?: number, clientY?: number) {
+    this.cancelDrag()
     const client =
       clientX === undefined || clientY === undefined ? this.defaultClientPoint() : { x: clientX, y: clientY }
     this.client = client
@@ -79,6 +112,10 @@ export class Palette extends OverlayComponent {
 
   close() {
     this.tooltip.close()
+    this.discardPendingLink()
+    this.connection = null
+    this.connectionItems = null
+    this.host.classList.remove('is-connection-modal')
     if (!this.open) return
     this.open = false
     this.commit(nothing)
@@ -86,27 +123,49 @@ export class Palette extends OverlayComponent {
 
   destroy() {
     this.cancelDrag()
+    this.discardPendingLink()
+    this.connection = null
+    this.connectionItems = null
     this.tooltip.destroy()
     super.destroy()
   }
 
+  private discardPendingLink() {
+    const id = this.connection?.pendingLinkId
+    if (id) this.adapter.discardPendingLink(id)
+  }
+
   private render() {
     this.tooltip.close()
+    this.host.classList.toggle('is-connection-modal', this.connection !== null)
     if (!this.open) {
       this.commit(nothing)
       return
     }
-    const items = this.paletteItems()
+    const items = this.availableItems()
     const categories = [...new Set(items.map((item) => item.category))]
     if (this.category !== null && !categories.includes(this.category)) this.category = null
     const matching = this.matchingItems(items)
     const visible = this.visibleItems(matching)
+    const connectionMode = this.connection !== null
+    const noCompatible = connectionMode && items.length === 0
     this.commit(html`
+      ${connectionMode
+        ? html`<div
+            class="bpgraph-connection-backdrop"
+            @pointerdown=${this.onBackdropPointerDown}
+            @click=${stopEvent}
+            @wheel=${stopWheel}
+            @contextmenu=${stopEvent}
+          ></div>`
+        : nothing}
       <div
         ${ref(this.panelRef)}
-        class="bpgraph-menu bpgraph-palette ${this.hidden ? 'is-hidden' : ''}"
+        class="bpgraph-menu bpgraph-palette ${this.hidden ? 'is-hidden' : ''} ${connectionMode ? 'is-connecting' : ''}"
         role="dialog"
-        aria-label=${this.t('Add node')}
+        aria-modal=${connectionMode ? 'true' : nothing}
+        aria-label=${connectionMode ? this.t('Add and connect node') : this.t('Add node')}
+        data-mode=${connectionMode ? 'connect' : 'add'}
         style=${styleMap({
           left: `${this.point.x}px`,
           top: `${this.point.y}px`,
@@ -114,11 +173,12 @@ export class Palette extends OverlayComponent {
         })}
         @pointerdown=${stopEvent}
         @wheel=${stopWheel}
+        @keydown=${this.onPanelKeyDown}
       >
         <div class="bpgraph-palette-header">
           <div>
-            <strong>${this.t('Add node')}</strong>
-            <p>${this.t('Choose a node to build your workflow')}</p>
+            <strong>${connectionMode ? this.t('Add and connect node') : this.t('Add node')}</strong>
+            ${connectionMode ? nothing : html`<p>${this.t('Choose a node to build your workflow')}</p>`}
           </div>
           <button
             type="button"
@@ -162,7 +222,12 @@ export class Palette extends OverlayComponent {
         <div class="bpgraph-palette-list" @scroll=${this.tooltip.close}>
           ${visible.length === 0
             ? html`<div class="bpgraph-palette-empty" role="status">
-                ${this.t('No matching nodes')}<br /><small>${this.t('Try another keyword or category')}</small>
+                ${noCompatible ? this.t('No compatible nodes') : this.t('No matching nodes')}<br />
+                <small
+                  >${noCompatible
+                    ? this.t('No node in this view accepts this port')
+                    : this.t('Try another keyword or category')}</small
+                >
               </div>`
             : categories
                 .filter((category) => visible.some((item) => item.category === category))
@@ -176,7 +241,10 @@ export class Palette extends OverlayComponent {
                 )}
         </div>
         <div class="bpgraph-palette-footer">
-          <span>${this.t('Click to add · Drag onto canvas')}</span><span>${this.t('Enter Add first result · Esc to close')}</span>
+          ${connectionMode
+            ? html`<span>${this.t('Click to add and connect · Esc to cancel')}</span>`
+            : html`<span>${this.t('Click to add · Drag onto canvas')}</span
+                ><span>${this.t('Enter Add first result · Esc to close')}</span>`}
         </div>
       </div>
     `)
@@ -189,7 +257,7 @@ export class Palette extends OverlayComponent {
         type="button"
         class="bpgraph-menu-item bpgraph-palette-item"
         data-type=${nodeClass.type}
-        draggable="true"
+        draggable=${this.connection ? 'false' : 'true'}
         @mouseenter=${(evt: MouseEvent) =>
           this.tooltip.enter(evt.currentTarget as HTMLElement, item.description, 'hover')}
         @mouseleave=${(evt: MouseEvent) => this.tooltip.leave(evt.currentTarget as HTMLElement, 'hover')}
@@ -237,9 +305,43 @@ export class Palette extends OverlayComponent {
     }
     if (evt.key !== 'Enter') return
     evt.preventDefault()
-    const [first] = this.visibleItems(this.matchingItems(this.paletteItems()))
+    const [first] = this.visibleItems(this.matchingItems(this.availableItems()))
     if (!first) return
     this.createNodeAt(first, this.client.x, this.client.y)
+  }
+
+  /** Keep focus in the modal panel; outside presses are intentionally inert. */
+  private onBackdropPointerDown = (evt: PointerEvent) => {
+    evt.preventDefault()
+    evt.stopPropagation()
+    this.searchRef.value?.focus()
+  }
+
+  /** Keep keyboard focus inside the modal connection palette. */
+  private onPanelKeyDown = (evt: KeyboardEvent) => {
+    if (!this.connection) return
+    if (evt.key === 'Escape') {
+      evt.stopPropagation()
+      this.close()
+      return
+    }
+    if (evt.key !== 'Tab') return
+    const focusable = [...this.host.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    )]
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    const active = document.activeElement as HTMLElement | null
+    if (evt.shiftKey) {
+      if (active === first || !this.host.contains(active)) {
+        evt.preventDefault()
+        last.focus()
+      }
+    } else if (active === last || !this.host.contains(active)) {
+      evt.preventDefault()
+      first.focus()
+    }
   }
 
   private paletteItems(): PaletteItem[] {
@@ -252,10 +354,12 @@ export class Palette extends OverlayComponent {
     const inLoopBody = this.graph.model.isLoopBody?.() ?? false
     // Generate loop entries and returns only with their bodies; ordinary loop nodes remain addable.
     const allowed = (nodeClass: NodeClassType) =>
-      !['loop-entry', 'loop-return'].includes(nodeClass.definition.type ?? '') &&
-      !(inSubgraph && nodeClass.type === 'start') &&
+      !['loop-entry', 'loop-return'].includes(nodeClass.definition.kind ?? nodeClass.definition.type ?? '') &&
+      !(inSubgraph && nodeClass.definitionId === 'start') &&
       // Hide event sources and persistent timers inside bodies to avoid engine rejection later.
-      !(inLoopBody && nodeClass.definition.executionMode === 'source')
+      !(inLoopBody && nodeClass.definition.executionMode === 'source') &&
+      !(inSubgraph && [...nodeClass.definition.inputs, ...nodeClass.definition.outputs]
+        .some(port => typeof port.type !== 'string' && port.type.kind === 'stream'))
     const regular = classes
       .filter(allowed)
       .map((nodeClass) => {
@@ -278,6 +382,23 @@ export class Palette extends OverlayComponent {
         category: entry.category || this.t('Other nodes'),
       }))
     return [...extra, ...regular]
+  }
+
+  /** Base items in add mode; compatible entries with their resolved port in connection mode. */
+  private availableItems(): PaletteItem[] {
+    if (!this.connection) return this.paletteItems()
+    if (this.connectionItems) return this.connectionItems
+    const source = this.connection.source
+    this.connectionItems = this.paletteItems().flatMap((item) => {
+      try {
+        const candidate = this.graph.createNodeInstance(item.nodeClass, this.paletteDefaults(item))
+        const port = findCompatiblePort(this.graph, candidate, source)
+        return port ? [{ ...item, candidate, port }] : []
+      } catch {
+        return []
+      }
+    })
+    return this.connectionItems
   }
 
   private matchingItems(items: PaletteItem[]) {
@@ -306,6 +427,10 @@ export class Palette extends OverlayComponent {
   }
 
   private createNodeAt(item: PaletteItem, clientX: number, clientY: number) {
+    if (this.connection) {
+      this.createConnectedNode(item as ConnectionItem)
+      return
+    }
     this.graph.startTransaction()
     const node = this.graph.addNode(item.nodeClass, this.paletteDefaults(item))
     this.moveNode(node, clientX, clientY)
@@ -313,8 +438,43 @@ export class Palette extends OverlayComponent {
     this.close()
   }
 
+  /**
+   * Add the chosen node and connect its first compatible port in one transaction.
+   *
+   * A replaced link is kept until the new link exists, so a failed link creation
+   * does not silently remove the original connection.
+   */
+  private createConnectedNode(item: ConnectionItem) {
+    const connection = this.connection
+    if (!connection) return
+    if (this.graph.findNode(connection.source.node.id) !== connection.source.node) {
+      this.close()
+      return
+    }
+    this.graph.startTransaction()
+    try {
+      const node = this.graph.addNode(item.candidate)
+      this.moveNode(node, connection.clientX, connection.clientY)
+      const ends = connectionEnds(connection.source, node, item.port)
+      const promoted = connection.pendingLinkId
+        ? this.adapter.promotePendingLink(connection.pendingLinkId, ends)
+        : null
+      if (!promoted) {
+        const link = this.graph.createLinkInstance({
+          source: ends.source,
+          target: ends.target,
+        } as LinkInstanceType)
+        this.graph.addLink(link)
+      }
+      if (connection.replaceLink) this.graph.removeLinks([connection.replaceLink])
+    } finally {
+      this.graph.commitTransaction()
+      this.close()
+    }
+  }
+
   private startNodeDrag(evt: DragEvent, item: PaletteItem) {
-    if (!evt.dataTransfer) return
+    if (this.connection || !evt.dataTransfer) return
     const { nodeClass } = item
     // Menu presses may leave a canvas selection origin; clear it before dragging.
     this.adapter.cancelSelection()
@@ -388,7 +548,8 @@ export class Palette extends OverlayComponent {
   }
 
   private nodeTitle(nodeClass: NodeClassType) {
-    return nodeClass.definition.title || nodeClass.type
+    const { name, title } = nodeClass.definition
+    return name || title || nodeClass.definitionId || nodeClass.type
   }
 
   private defaultClientPoint(): Point {

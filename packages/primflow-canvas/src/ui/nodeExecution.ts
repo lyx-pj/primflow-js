@@ -2,8 +2,9 @@ import { translate, type CanvasLanguage } from './i18n'
 import { V } from '@joint/core'
 import type { NodeExecutionStatus } from '@lyx-pj/primflow-model'
 
-const nodeExecutionLabels: Record<NodeExecutionStatus | 'paused', string> = {
+export const nodeExecutionLabels: Record<NodeExecutionStatus | 'paused', string> = {
   idle: 'Idle', pending: 'Pending', running: 'Executing', completed: 'Completed',
+  failed: 'Failed', cancelled: 'Cancelled', skipped: 'Skipped', interrupted: 'Waiting for external input',
   paused: 'Paused at breakpoint',
 }
 
@@ -11,6 +12,10 @@ const colors = {
   paused: ['#fbbf24', '#fde68a', '#fb923c'],
   running: ['#22d3ee', '#818cf8', '#c084fc'],
   completed: ['#34d399', '#a7f3d0', '#2dd4bf'],
+  failed: ['#ef4444', '#fda4af', '#e11d48'],
+  cancelled: ['#f97316', '#fdba74', '#f43f5e'],
+  skipped: ['#64748b', '#cbd5e1', '#94a3b8'],
+  interrupted: ['#8b5cf6', '#d8b4fe', '#e879f9'],
 }
 
 /** Draw blurred fill glows behind nodes without extra outlines or status text. */

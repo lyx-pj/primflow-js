@@ -45,6 +45,19 @@ const STYLES = `
 .bpgraph-node-execution.is-completed .bpgraph-node-execution-halo {
   opacity: 0.45;
 }
+.bpgraph-node-execution.is-failed .bpgraph-node-execution-halo {
+  opacity: 0.7;
+}
+.bpgraph-node-execution.is-cancelled .bpgraph-node-execution-halo {
+  opacity: 0.52;
+}
+.bpgraph-node-execution.is-skipped .bpgraph-node-execution-halo {
+  opacity: 0.3;
+  filter: blur(8px);
+}
+.bpgraph-node-execution.is-interrupted .bpgraph-node-execution-halo {
+  animation: bpgraph-node-glow 2.8s ease-in-out infinite;
+}
 [data-node-execution-status="completed"]:hover .bpgraph-node-execution-halo {
   opacity: 0.7;
 }
@@ -127,6 +140,7 @@ const STYLES = `
   [data-node-execution-status] { transition: none; }
 }
 .bpgraph-overlay {
+  --bpgraph-ui-gap: 8px;
   position: absolute;
   inset: 0;
   z-index: 30;
@@ -145,6 +159,15 @@ const STYLES = `
 .bpgraph-context-layer {
   z-index: 2;
 }
+.bpgraph-palette-layer.is-connection-modal {
+  z-index: 10;
+}
+.bpgraph-connection-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: transparent;
+}
 .bpgraph-replay-layer {
   z-index: 2;
 }
@@ -152,6 +175,9 @@ const STYLES = `
   z-index: 3;
 }
 .bpgraph-palette-tooltip-layer {
+  z-index: 11;
+}
+.bpgraph-port-tooltip-layer {
   z-index: 4;
 }
 .bpgraph-palette-tooltip {
@@ -169,6 +195,38 @@ const STYLES = `
   overflow: auto;
   overscroll-behavior: contain;
   pointer-events: auto;
+}
+.bpgraph-port-tooltip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: 240px;
+  padding: 5px 9px;
+  border: 1px solid var(--bpgraph-menu-border, rgba(148, 163, 184, 0.24));
+  border-radius: 6px;
+  background: var(--bpgraph-tooltip-bg, #14171d);
+  color: var(--bpgraph-menu-fg, #e8eaed);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font: 12px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  pointer-events: none;
+}
+.bpgraph-port-tooltip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bpgraph-port-tooltip-type {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--bpgraph-menu-muted, #a5acb8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 18px;
 }
 .bpgraph-preview-layer {
   z-index: 1;
@@ -190,24 +248,75 @@ const STYLES = `
   user-select: text;
   backdrop-filter: blur(12px);
 }
-.bpgraph-node-preview-header {
+.bpgraph-node-preview-header,
+.bpgraph-node-panel-execution-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.bpgraph-node-preview.is-status-only {
+  width: max-content;
+  padding: 8px 12px;
 }
 .bpgraph-node-preview-header strong {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 13px;
 }
-.bpgraph-node-preview-header span {
-  flex-shrink: 0;
-  color: #6ee7b7;
-  font-size: 11px;
+.bpgraph-node-preview-header .bpgraph-execution-status,
+.bpgraph-node-panel-execution-header .bpgraph-execution-status {
+  max-width: 60%;
 }
-.bpgraph-node-preview-header .is-paused {
-  color: #fbbf24;
+.bpgraph-node-panel-execution-header .bpgraph-node-panel-section-title {
+  margin: 0;
+}
+.bpgraph-execution-badge {
+  box-sizing: border-box;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.bpgraph-execution-badge.is-retry {
+  color: #fcd34d;
+}
+.bpgraph-execution-attempt {
+  display: grid;
+  gap: 8px;
+}
+.bpgraph-execution-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.bpgraph-execution-error {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  background: rgba(248, 113, 113, 0.09);
+  color: #fca5a5;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.bpgraph-execution-error-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  font-weight: 600;
+}
+.bpgraph-execution-error-heading code {
+  color: inherit;
+  font-size: 10px;
 }
 .bpgraph-node-preview-section {
   margin-top: 12px;
@@ -241,10 +350,20 @@ const STYLES = `
   margin: 8px 0 0;
   color: #94a3b8;
 }
-.bpgraph-toolbar {
-  position: absolute;
-  top: 8px;
+.bpgraph-toolbar-layer {
   display: flex;
+  align-items: flex-start;
+  box-sizing: border-box;
+  /* The right padding is the measured space covered by side panels plus one gap. */
+  padding: var(--bpgraph-ui-gap) calc(var(--bpgraph-ui-gap) + var(--bpgraph-toolbar-inset, 0px)) 0
+    var(--bpgraph-ui-gap);
+}
+.bpgraph-toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+  box-sizing: border-box;
   gap: 6px;
   padding: 4px;
   border-radius: 10px;
@@ -252,8 +371,8 @@ const STYLES = `
 }
 .bpgraph-minimap {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  bottom: 12px;
+  left: 12px;
   box-sizing: border-box;
   width: 162px;
   max-width: calc(100% - 24px);
@@ -268,6 +387,10 @@ const STYLES = `
   cursor: crosshair;
 }
 .bpgraph-minimap:hover { opacity: 1; }
+/* The replay banner also occupies the bottom left; stack the minimap above it. */
+[data-replay="true"] .bpgraph-minimap {
+  bottom: 56px;
+}
 .bpgraph-minimap-map {
   display: block;
   width: 100%;
@@ -282,15 +405,18 @@ const STYLES = `
   pointer-events: none;
 }
 .bpgraph-minimap-node { pointer-events: none; }
+/* Compact canvases trade the overview for room to edit; zoom controls stay available. */
+[data-bpgraph-compact="true"] .bpgraph-minimap-layer {
+  display: none;
+}
 .bpgraph-toolbar.is-left {
-  left: 8px;
+  margin-right: auto;
 }
 .bpgraph-toolbar.is-center {
-  left: 50%;
-  transform: translateX(-50%);
+  margin-inline: auto;
 }
 .bpgraph-toolbar.is-right {
-  right: 8px;
+  margin-left: auto;
 }
 .bpgraph-toolbar-item {
   position: relative;
@@ -340,9 +466,13 @@ const STYLES = `
 }
 .bpgraph-toolbar-status {
   align-self: center;
+  max-width: 160px;
+  overflow: hidden;
   padding: 0 8px;
   color: var(--bpgraph-toolbar-fg, #e8eaed);
   font: 12px/1.4 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bpgraph-toolbar-button.is-icon {
   display: inline-flex;
@@ -369,6 +499,56 @@ const STYLES = `
 .bpgraph-toolbar-button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+/* Non-modal dialog renders in the top layer, so it stays above host overlays near the toolbar. */
+.bpgraph-toolbar-overflow {
+  position: fixed;
+  inset: auto;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--bpgraph-menu-border, rgba(148, 163, 184, 0.24));
+  border-radius: 8px;
+  background: var(--bpgraph-menu-bg, #23262b);
+  color: var(--bpgraph-menu-fg, #e8eaed);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font: 12px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+.bpgraph-toolbar-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bpgraph-toolbar-overflow-item:hover:not(:disabled) {
+  background: var(--bpgraph-menu-hover, rgba(255, 255, 255, 0.08));
+}
+.bpgraph-toolbar-overflow-item:focus-visible {
+  outline: 2px solid var(--bpgraph-toolbar-fg, #e8eaed);
+  outline-offset: -2px;
+}
+.bpgraph-toolbar-overflow-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.bpgraph-toolbar-overflow-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 .bpgraph-replay-banner {
   position: absolute;
@@ -614,6 +794,12 @@ const STYLES = `
   border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
 }
+.bpgraph-palette.is-connecting {
+  z-index: 1;
+}
+.bpgraph-palette.is-connecting .bpgraph-palette-item {
+  cursor: pointer;
+}
 .bpgraph-palette-header {
   display: flex;
   align-items: flex-start;
@@ -637,8 +823,7 @@ const STYLES = `
   font: 20px/1 system-ui, sans-serif;
   cursor: pointer;
 }
-.bpgraph-palette button:focus-visible,
-.bpgraph-palette-search:focus-visible {
+.bpgraph-palette button:focus-visible {
   outline: 2px solid var(--bpgraph-focus, #93b4ff);
   outline-offset: 2px;
 }
@@ -789,14 +974,14 @@ const STYLES = `
 }
 .bpgraph-node-panel {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
+  top: var(--bpgraph-ui-gap);
+  right: var(--bpgraph-ui-gap);
+  bottom: var(--bpgraph-ui-gap);
   z-index: 1;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  max-width: calc(100% - 16px);
+  max-width: calc(100% - var(--bpgraph-ui-gap) * 2);
   background: var(--bpgraph-panel-bg, #1d2024);
   color: var(--bpgraph-panel-fg, #e8eaed);
   border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
@@ -806,18 +991,53 @@ const STYLES = `
   pointer-events: auto;
   overflow: hidden;
 }
+/* Compact sheets start below the toolbar instead of floating over it. */
+.bpgraph-node-panel.is-compact {
+  top: calc(var(--bpgraph-toolbar-bottom, 0px) + var(--bpgraph-ui-gap));
+}
 .bpgraph-node-panel-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
+}
+.bpgraph-node-panel-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
 }
 .bpgraph-node-panel-title {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.bpgraph-node-panel-tabs {
+  display: flex;
+  gap: 4px;
+}
+.bpgraph-node-panel-tab {
+  padding: 7px 10px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.5));
+  font: inherit;
+  cursor: pointer;
+}
+.bpgraph-node-panel-tab:hover {
+  color: var(--bpgraph-panel-fg, #e8eaed);
+}
+.bpgraph-node-panel-tab[aria-selected="true"] {
+  border-bottom-color: var(--bpgraph-focus, #93b4ff);
+  color: var(--bpgraph-panel-fg, #e8eaed);
+}
+.bpgraph-node-panel-tab:focus-visible {
+  outline: 2px solid var(--bpgraph-focus, #93b4ff);
+  outline-offset: 2px;
 }
 .bpgraph-node-panel-close {
   padding: 0 4px;
@@ -831,6 +1051,12 @@ const STYLES = `
 .bpgraph-node-panel-close:hover {
   color: var(--bpgraph-panel-fg, #e8eaed);
 }
+.bpgraph-node-custom-root {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
 .bpgraph-node-panel-scroll {
   flex: 1;
   overflow: auto;
@@ -840,6 +1066,7 @@ const STYLES = `
   flex-direction: column;
   gap: 2px;
   padding: 8px 12px;
+  overflow-wrap: anywhere;
   color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.5));
   border-bottom: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
 }
@@ -890,6 +1117,17 @@ const STYLES = `
 .bpgraph-node-panel-input:focus {
   border-color: var(--bpgraph-panel-accent, #4b9fff);
 }
+.bpgraph-node-panel-limit-error {
+  display: none;
+  margin-top: 4px;
+  color: #fca5a5;
+}
+.bpgraph-node-panel-limit-field .bpgraph-node-panel-input:invalid {
+  border-color: #fca5a5;
+}
+.bpgraph-node-panel-limit-field .bpgraph-node-panel-input:invalid + .bpgraph-node-panel-limit-error {
+  display: block;
+}
 .bpgraph-node-panel-select {
   position: relative;
 }
@@ -930,16 +1168,50 @@ const STYLES = `
   margin: 0;
   color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.4));
 }
+.bpgraph-node-panel-empty-block {
+  padding: 12px;
+}
+.bpgraph-node-panel-overview {
+  padding: 12px;
+}
+.bpgraph-node-panel-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bpgraph-node-panel-overview-item {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.bpgraph-node-panel-overview-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.bpgraph-node-panel-overview-item:focus-visible {
+  outline: 2px solid var(--bpgraph-focus, #93b4ff);
+  outline-offset: 2px;
+}
 .bpgraph-debug-panel {
   position: absolute;
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
+  top: var(--bpgraph-ui-gap);
+  right: var(--bpgraph-ui-gap);
+  bottom: var(--bpgraph-ui-gap);
   z-index: 1;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  max-width: calc(100% - 16px);
+  max-width: calc(100% - var(--bpgraph-ui-gap) * 2);
   overflow: hidden;
   border: 1px solid var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
   border-radius: 12px;
@@ -948,6 +1220,10 @@ const STYLES = `
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   font: 12px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
   pointer-events: auto;
+}
+/* Compact sheets start below the toolbar instead of floating over it. */
+.bpgraph-debug-panel.is-compact {
+  top: calc(var(--bpgraph-toolbar-bottom, 0px) + var(--bpgraph-ui-gap));
 }
 .bpgraph-debug-panel-header {
   display: flex;
@@ -1016,7 +1292,6 @@ const STYLES = `
   color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.4));
 }
 .bpgraph-debug-records,
-.bpgraph-debug-chain,
 .bpgraph-debug-logs {
   margin: 0;
   padding: 0;
@@ -1078,6 +1353,10 @@ const STYLES = `
   background: #fbbf24;
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.18);
 }
+.bpgraph-debug-record.is-interrupted .bpgraph-debug-record-dot {
+  background: #c084fc;
+  box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.18);
+}
 .bpgraph-debug-record.is-completed .bpgraph-debug-record-dot {
   background: #34d399;
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
@@ -1122,107 +1401,42 @@ const STYLES = `
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.bpgraph-debug-chain {
-  display: flex;
-  flex-direction: column;
-}
-.bpgraph-debug-chain-item {
-  position: relative;
-  display: flex;
-  gap: 8px;
-  padding-bottom: 8px;
-}
-.bpgraph-debug-chain-item:last-child {
-  padding-bottom: 0;
-}
-.bpgraph-debug-chain-item:not(:last-child)::before {
-  content: '';
-  position: absolute;
-  top: 22px;
-  bottom: 0;
-  /* Indent subgraph nodes by level, shifting connectors with them. */
-  left: calc(9px + var(--bpgraph-chain-depth, 0) * 14px);
-  width: 1px;
-  background: var(--bpgraph-panel-border, rgba(255, 255, 255, 0.12));
-}
-.bpgraph-debug-chain-index {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: rgba(148, 163, 184, 0.14);
-  color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.55));
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.bpgraph-debug-chain-item.is-running .bpgraph-debug-chain-index {
-  background: rgba(34, 211, 238, 0.2);
-  color: #a5f3fc;
-  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12);
-}
-.bpgraph-debug-chain-item.is-completed .bpgraph-debug-chain-index {
-  background: rgba(52, 211, 153, 0.18);
-  color: #a7f3d0;
-}
-.bpgraph-debug-chain-body {
-  display: flex;
-  flex: 1;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  padding-top: 1px;
-}
-.bpgraph-debug-chain-body strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 12px;
-}
 .bpgraph-debug-status {
   flex-shrink: 0;
   color: var(--bpgraph-panel-muted, rgba(255, 255, 255, 0.5));
   font-size: 11px;
 }
-/* Role labels distinguish subgraph calls, entries, and exits from ordinary nodes. */
-.bpgraph-debug-chain-tag {
-  flex-shrink: 0;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: rgba(56, 189, 248, 0.16);
-  color: #7dd3fc;
-  font-size: 10px;
-  line-height: 1.6;
-}
-.bpgraph-debug-chain-tag.is-subgraph-start {
-  background: rgba(74, 222, 128, 0.16);
-  color: #86efac;
-}
-.bpgraph-debug-chain-tag.is-subgraph-end {
-  background: rgba(251, 146, 60, 0.16);
-  color: #fdba74;
-}
-.bpgraph-debug-status.is-running {
+.bpgraph-debug-status.is-running,
+.bpgraph-execution-status.is-running {
   color: #67e8f9;
 }
-.bpgraph-debug-status.is-paused {
+.bpgraph-debug-status.is-paused,
+.bpgraph-execution-status.is-paused {
   color: #fbbf24;
 }
-.bpgraph-debug-status.is-completed {
+.bpgraph-debug-status.is-completed,
+.bpgraph-execution-status.is-completed {
   color: #6ee7b7;
 }
-.bpgraph-debug-status.is-failed {
+.bpgraph-debug-status.is-failed,
+.bpgraph-execution-badge.is-failed {
   color: #fca5a5;
 }
-.bpgraph-debug-status.is-cancelled {
+.bpgraph-debug-status.is-cancelled,
+.bpgraph-execution-status.is-cancelled {
+  color: #fdba74;
+}
+.bpgraph-debug-status.is-skipped,
+.bpgraph-execution-status.is-skipped {
   color: #94a3b8;
 }
+.bpgraph-debug-status.is-interrupted,
+.bpgraph-execution-status.is-interrupted {
+  color: #d8b4fe;
+}
 .bpgraph-debug-status.is-waiting,
-.bpgraph-debug-status.is-pending {
+.bpgraph-debug-status.is-pending,
+.bpgraph-execution-status.is-pending {
   color: #93c5fd;
 }
 .bpgraph-debug-logs {
@@ -1241,28 +1455,48 @@ const STYLES = `
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
-.bpgraph-debug-log-level {
+/* Engine trace event type, shown as a compact badge before the message. */
+.bpgraph-debug-log-type {
   padding: 0 4px;
   border-radius: 3px;
   background: rgba(148, 163, 184, 0.14);
   color: #cbd5e1;
   font-size: 10px;
   line-height: 1.5;
+  white-space: nowrap;
 }
-.bpgraph-debug-log.is-debug .bpgraph-debug-log-level {
+.bpgraph-debug-log-type.is-plain {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+.bpgraph-debug-log.is-debug .bpgraph-debug-log-type {
   color: #94a3b8;
 }
-.bpgraph-debug-log.is-success .bpgraph-debug-log-level {
+.bpgraph-debug-log.is-success .bpgraph-debug-log-type {
   background: rgba(52, 211, 153, 0.16);
   color: #a7f3d0;
 }
-.bpgraph-debug-log.is-warn .bpgraph-debug-log-level {
+.bpgraph-debug-log.is-warn .bpgraph-debug-log-type {
   background: rgba(251, 191, 36, 0.16);
   color: #fde68a;
 }
-.bpgraph-debug-log.is-error .bpgraph-debug-log-level {
+.bpgraph-debug-log.is-error .bpgraph-debug-log-type {
   background: rgba(248, 113, 113, 0.16);
   color: #fecaca;
+}
+/* Task-level events describe the run itself, not one node. */
+.bpgraph-debug-log.is-task-status .bpgraph-debug-log-type {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+}
+.bpgraph-debug-log.is-activation-status .bpgraph-debug-log-type {
+  background: rgba(34, 211, 238, 0.14);
+  color: #a5f3fc;
+}
+.bpgraph-debug-log.is-loop-invocation .bpgraph-debug-log-type,
+.bpgraph-debug-log.is-loop-frame .bpgraph-debug-log-type {
+  background: rgba(167, 139, 250, 0.16);
+  color: #c4b5fd;
 }
 /* Keep logs on one line with ellipsis so long messages do not expand the panel. */
 .bpgraph-debug-log-message {
@@ -1326,6 +1560,16 @@ const STYLES = `
 }
 .bpgraph-node-dropdown-option:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+.bpgraph-node-overlay-host {
+  position: absolute;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+}
+.bpgraph-node-overlay {
+  position: absolute;
+  pointer-events: auto;
 }
 `
 

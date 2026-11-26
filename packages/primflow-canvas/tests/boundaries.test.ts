@@ -4,11 +4,12 @@
 // model's NodeInstance, silently breaking instanceof checks.
 // Assert that both packages share the same class.
 import { test, expect } from 'vitest'
-import { Node, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
-import { Graph, Node as CanvasNode, NodeInstance as CanvasNodeInstance } from '../src/index'
+import { defineNode, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
+import { Graph, defineNode as canvasDefineNode, NodeInstance as CanvasNodeInstance } from '../src/index'
 
-test('canvas shares the same instance with model Node / NodeInstance', () => {
-  expect(CanvasNode).toBe(Node)
+test('canvas shares the model node factory and NodeInstance class', () => {
+  expect(canvasDefineNode).toBeTypeOf('function')
+  expect(canvasDefineNode).toBe(defineNode)
   expect(CanvasNodeInstance).toBe(NodeInstance)
   expect(Graph.NodeInstance).toBe(NodeInstance)
 })

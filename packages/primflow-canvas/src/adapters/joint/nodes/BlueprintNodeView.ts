@@ -1,5 +1,5 @@
 import type { CanvasLanguage } from '../../../ui/i18n'
-import { html, nothing, render } from 'lit-html'
+import { html, nothing, render, type TemplateResult } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
 import { dia } from '@joint/core'
 import type { InputPort } from '@lyx-pj/primflow-model'
@@ -8,6 +8,9 @@ import { ensureUiStyles } from '../../../ui/styles'
 import { portEditorTemplate, type PortEditorHandlers } from '../../../ui/portEditors'
 import { renderNodeHeader } from '../../../ui/nodeHeader'
 import { renderNodeExecution } from '../../../ui/nodeExecution'
+import { NodeOverlayHost } from '../../../ui/nodeOverlay'
+import type { GraphAdapter } from '../../GraphAdapter'
+import type { Graph, NodeInstanceType } from '../../../Graph'
 
 type DropdownOption = { label: string; value: string }
 
@@ -26,15 +29,22 @@ export class BlueprintNodeView extends dia.ElementView {
   private dropdowns = new Map<string, DropdownState>()
   private openDropdown: string | null = null
   private dropdownHost: HTMLDivElement | null = null
+  /** Paper-level overlay host for application-provided port editors. */
+  private overlay: NodeOverlayHost | null = null
 
   initialize(...args: Parameters<dia.ElementView['initialize']>) {
     super.initialize(...args)
     if (this.model.graph) this.listenTo(this.model.graph, 'change:language', this.refreshTitleBar)
+    if (this.model.graph) this.listenTo(this.model.graph, 'change:language', this.renderCustomBody)
     this.listenTo(this.model, 'change:title', this.refreshTitle)
     this.listenTo(this.model, 'change:breakpoint', this.refreshTitle)
+    this.listenTo(this.model, 'change:breakpoint', this.renderCustomBody)
     this.listenTo(this.model, 'change:executionStatus change:executionPaused', this.renderExecutionStatus)
     this.listenTo(this.model, 'change:size', this.refreshTitleBar)
+    this.listenTo(this.model, 'change:size', this.renderCustomBody)
     this.listenTo(this.model, 'change:inputs change:outputs', this.applyPortHighlights)
+    // Application renderers may depend on node values, ports, or the title.
+    this.listenTo(this.model, 'change:values change:title change:inputs change:outputs', this.renderCustomBody)
   }
 
   /**
@@ -44,6 +54,7 @@ export class BlueprintNodeView extends dia.ElementView {
   confirmUpdate(flag: number, opt: Record<string, unknown> = {}): number {
     const remaining = super.confirmUpdate(flag, opt)
     this.renderPortEditors()
+    this.renderCustomBody()
     return remaining
   }
 
@@ -51,6 +62,7 @@ export class BlueprintNodeView extends dia.ElementView {
     super.renderMarkup()
     this.renderHeader()
     this.renderExecutionStatus()
+    this.renderCustomBody()
     return this
   }
 
@@ -58,6 +70,7 @@ export class BlueprintNodeView extends dia.ElementView {
     this.paper?.el.removeEventListener('click', this.otherClick)
     this.paper?.el.addEventListener('click', this.otherClick)
     this.renderPortEditors()
+    this.renderCustomBody()
 
     const plus = this.findNode('switch-plus-rect')
     if (plus) {
@@ -78,11 +91,17 @@ export class BlueprintNodeView extends dia.ElementView {
     }
   }
 
+  onRemove() {
+    this.overlay?.destroy()
+    this.overlay = null
+    super.onRemove()
+  }
+
   // ---- Port editors -----------------------------------------------------
 
   private readonly portHandlers: PortEditorHandlers = {
     input: (port, evt) => {
-      if (port.type === 'select') {
+      if (port.editor === 'select') {
         this.filterDropdown(evt)
         return
       }
@@ -91,7 +110,7 @@ export class BlueprintNodeView extends dia.ElementView {
       this.commitPortValue(port, field)
     },
     focus: (port, evt) => {
-      if (port.type === 'select') this.showDropdown(evt)
+      if (port.editor === 'select') this.showDropdown(evt)
     },
     blur: (port, evt) => {
       if (port.type === 'number') this.validateNumberField(evt.target as HTMLInputElement)
@@ -117,14 +136,80 @@ export class BlueprintNodeView extends dia.ElementView {
       if (!input.id || input.showInput === false) continue
       const editor = this.findPortNode(input.id, 'portEditor') as HTMLElement | SVGElement | null
       if (!editor || editor.childElementCount > 0) continue
+      const custom = this.customEditor(input)
+      if (custom) {
+        render(custom, editor)
+        continue
+      }
       render(portEditorTemplate(input, style, values, this.portHandlers), editor)
     }
     this.syncDropdowns(inputs)
   }
 
+  /**
+   * Render application content for a node that registered its own renderer.
+   *
+   * The renderer owns the node content; the element, its ports, and its links
+   * are unchanged, so connecting and selection keep working.
+   *
+   * Declared as a method: `initialize()` registers it as a listener before
+   * class field initializers run, so an arrow field would still be undefined.
+   */
+  private renderCustomBody() {
+    const registration = (this.model as BlueprintNode).get('nodeRenderer')
+    if (!registration) return
+    const root = this.findNode('nodeCustomRoot') as HTMLElement | null
+    if (!root) return
+    const { width, height } = this.model.size()
+    render(registration.render({
+      graph: this.canvasGraph(),
+      node: this.nodeInstance(),
+      width,
+      height,
+    }), root)
+  }
+
+  /**
+   * Application-provided editor for a port, or undefined when the port uses a
+   * built-in control.
+   */
+  private customEditor(input: InputPort): TemplateResult | typeof nothing | undefined {
+    const registration = (this.model as BlueprintNode).get('editors')?.get(input.type, 'port')
+    if (!registration) return undefined
+    return registration.render({
+      graph: this.canvasGraph(),
+      node: this.nodeInstance(),
+      port: input,
+      value: (this.model.get('values') || {})[input.name],
+      setValue: (value) => this.setInputValue(input.name, value),
+      style: this.model.get('style') || {},
+      overlay: this.overlayHost,
+    })
+  }
+
+  /** The canvas graph behind this view. */
+  private canvasGraph(): Graph | undefined {
+    return this.model.graph?.get('canvasGraph') as Graph | undefined
+  }
+
+  /** The canvas node instance behind this view, when the adapter exposes it. */
+  private nodeInstance(): NodeInstanceType | undefined {
+    const adapter = this.model.graph?.get('adapter') as GraphAdapter | undefined
+    return adapter?.getNodeInstance(this.model.id as string)
+  }
+
+  /** Paper-level overlay host used by application-provided port editors. */
+  private get overlayHost(): NodeOverlayHost {
+    if (!this.overlay) {
+      const paperEl = this.paper?.el as HTMLElement | undefined
+      this.overlay = new NodeOverlayHost(paperEl ?? document.body)
+    }
+    return this.overlay
+  }
+
   private syncDropdowns(inputs: readonly InputPort[]) {
     const selects = inputs.filter((input): input is InputPort & { id: string } => {
-      return input.type === 'select' && Boolean(input.id)
+      return input.editor === 'select' && Boolean(input.id)
     })
     const names = new Set(selects.map((input) => input.name))
     for (const name of [...this.dropdowns.keys()]) {
@@ -188,11 +273,14 @@ export class BlueprintNodeView extends dia.ElementView {
   }
 
   setInputValue(inputName: string, value: unknown) {
+    // Update the node instance first. The adapter then writes the full value
+    // map back to the joint model, so value-dependent renderers re-render with
+    // the instance already updated.
+    this.model.graph.trigger('node:values:changed', this, inputName, value)
     this.model.set('values', {
       ...this.model.get('values'),
       [inputName]: value,
     })
-    this.model.graph.trigger('node:values:changed', this, inputName, value)
   }
 
   // ---- Dropdown ---------------------------------------------------------
@@ -415,12 +503,18 @@ export class BlueprintNodeView extends dia.ElementView {
     if (!input?.id) return
     const editor = this.findPortNode(input.id, 'portEditor') as HTMLElement | null
     if (!editor) return
+    // A registered editor owns its markup, so re-render it instead of clearing
+    // the mount with the built-in template.
+    if ((this.model as BlueprintNode).get('editors')?.has(input.type, 'port')) {
+      render(this.customEditor(input), editor)
+      return
+    }
     const field = editor.querySelector<HTMLInputElement>('[data-port-field]')
     // Keep caret and incomplete numbers during text editing; focused checkboxes still need checked updates.
     if (!field || (!force && input.type !== 'boolean' && field === document.activeElement)) return
     const value = values[input.name]
     if (input.type === 'number' && (typeof value !== 'number' || Number.isNaN(value))) return
-    if ((input.type === 'string' || input.type === 'select') && typeof value !== 'string') return
+    if (input.type === 'string' && typeof value !== 'string') return
     render(portEditorTemplate(input, (this.model as BlueprintNode).get('style') || {}, values, this.portHandlers), editor)
   }
 
@@ -429,13 +523,19 @@ export class BlueprintNodeView extends dia.ElementView {
     const portNode = this.findPortNode(portId, 'portBody')
     if (portNode) {
       const style = (this.model as BlueprintNode).get('style') || {}
-      const portStyle = (portId.startsWith('in-') ? style.ports?.input : style.ports?.output) || {}
-      const fill = portStyle.port?.highlightFill || 'rgba(255, 255, 255, 0.8)'
-      const stroke = portStyle.port?.highlightStroke || 'rgba(255, 255, 255, 1)'
+      const portStyle = ((this.model as BlueprintNode).getPort(portId)?.group === 'in' ? style.ports?.input : style.ports?.output) || {}
+      // A connected port fills with its type colour, which is what tells port
+      // kinds apart once they leave the resting outline state. The outline
+      // keeps the same colour, so the port reads as one solid shape.
+      const typeColor = style.ports?.colors?.[this.portType(portId) ?? '']
+      const fill = typeColor || portStyle.port?.highlightFill || 'rgba(255, 255, 255, 0.8)'
+      const stroke = typeColor || portStyle.port?.highlightStroke || 'rgba(255, 255, 255, 1)'
       const strokeWidth = portStyle.port?.highlightStrokeWidth ?? 1
       portNode.setAttribute('fill', fill)
       portNode.setAttribute('stroke', stroke)
       portNode.setAttribute('stroke-width', String(strokeWidth))
+      // A connected port reads at full strength.
+      portNode.setAttribute('stroke-opacity', '1')
     } else if (retry < 10) {
       requestAnimationFrame(() => {
         setTimeout(() => {
@@ -445,17 +545,32 @@ export class BlueprintNodeView extends dia.ElementView {
     }
   }
 
+  /** Data type of one port, used to resolve its colour. */
+  private portType(portId: string) {
+    const node = this.model as BlueprintNode
+    const ports = [...(node.get('inputs') || []), ...(node.get('outputs') || [])]
+    return ports.find((port) => port.id === portId)?.type
+  }
+
   unhighlightPort(portId: string) {
     const portNode = this.findPortNode(portId, 'portBody')
     if (portNode) {
       const style = (this.model as BlueprintNode).get('style') || {}
-      const portStyle = (portId.startsWith('in-') ? style.ports?.input : style.ports?.output) || {}
-      const fill = portStyle.port?.fill || 'rgba(255, 255, 255, 0.5)'
-      const stroke = portStyle.port?.stroke || 'rgba(255, 255, 255, 0.8)'
+      const port = (this.model as BlueprintNode).getPort(portId)
+      const portStyle = (port?.group === 'in' ? style.ports?.input : style.ports?.output) || {}
+      // The port carries its own resolved colours, which restores the type
+      // outline after a highlight is cleared.
+      const own = port?.attrs?.portBody as
+        | { fill?: string; stroke?: string; strokeOpacity?: number }
+        | undefined
+      const fill = own?.fill ?? portStyle.port?.fill ?? 'rgba(255, 255, 255, 0.5)'
+      const stroke = own?.stroke ?? portStyle.port?.stroke ?? 'rgba(255, 255, 255, 0.8)'
       const strokeWidth = portStyle.port?.strokeWidth ?? 1
+      const strokeOpacity = own?.strokeOpacity ?? 1
       portNode.setAttribute('fill', fill)
       portNode.setAttribute('stroke', stroke)
       portNode.setAttribute('stroke-width', String(strokeWidth))
+      portNode.setAttribute('stroke-opacity', String(strokeOpacity))
     }
   }
 }

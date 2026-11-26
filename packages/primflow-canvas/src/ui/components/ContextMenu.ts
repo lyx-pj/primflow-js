@@ -195,14 +195,15 @@ export class ContextMenu extends OverlayComponent {
         },
       ]
     }
+    const breakpointNode = context.node?.definition?.valueOutputs ? undefined : context.node
     return [
-      ...(context.node
+      ...(breakpointNode
         ? [
             {
               id: 'breakpoint',
-              label: context.node.breakpoint ? this.t('Remove breakpoint') : this.t('Set breakpoint'),
+              label: breakpointNode.breakpoint ? this.t('Remove breakpoint') : this.t('Set breakpoint'),
               run: () => {
-                context.node!.breakpoint = !context.node!.breakpoint
+                breakpointNode.breakpoint = !breakpointNode.breakpoint
               },
             },
           ]
@@ -211,7 +212,7 @@ export class ContextMenu extends OverlayComponent {
         id: 'copy',
         label: this.t('Copy'),
         shortcut: `${modifier}+C`,
-        separatorBefore: Boolean(context.node),
+        separatorBefore: Boolean(breakpointNode),
         run: () => this.graph.copySelection(),
       },
       {

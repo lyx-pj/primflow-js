@@ -1,4 +1,4 @@
-import { dia, shapes, config, anchors, connectors, highlighters } from '@joint/core'
+import { dia, shapes, config, anchors, connectors, highlighters, linkTools } from '@joint/core'
 import { BlueprintNode } from './nodes/BlueprintNode'
 import { BlueprintNodeView } from './nodes/BlueprintNodeView'
 import { ScrollerController } from './ScrollerController'
@@ -6,10 +6,21 @@ import { SelectionController } from './SelectionController'
 import { GroupEffectController } from './GroupEffectController'
 import type { GraphAdapter } from '..//GraphAdapter'
 import type { NodeInstanceType } from '../../Graph'
-import type { NodeStyle, LinkStyle, OutputPort } from '@lyx-pj/primflow-model'
-import type { LinkInstanceType } from '../../Graph'
+import type { NodeStyle, LinkStyle } from '@lyx-pj/primflow-model'
+import type { LinkEnds, LinkInstanceType } from '../../Graph'
 
 config.classNamePrefix = 'bpgraph-'
+
+/**
+ * Attributes for the transparent link hit path.
+ *
+ * JointJS draws a 10px invisible wrapper over every link for pointer events and
+ * gives it round end caps. A round cap reaches 5px past the port anchor and
+ * covers the outer half of a connected port, stealing its hover and drag. A
+ * butt cap ends the hit path where the visible line ends, so the port keeps the
+ * pointer while the rest of the link stays easy to select.
+ */
+const LINK_WRAPPER_ATTRS = { strokeLinecap: 'butt' as const }
 
 export const custom = {
   BlueprintNode,
@@ -17,6 +28,8 @@ export const custom = {
 } as const
 
 const namespace = { custom, standard: shapes.standard };
+
+type JointLinkEnd = { id?: string; port?: string; x?: number; y?: number }
 
 interface IJointGraph {}
 
@@ -27,9 +40,16 @@ export class JointGraph implements IJointGraph {
   public selectionController!: SelectionController
   public groupEffectController!: GroupEffectController
   public adapter: GraphAdapter
+  private readonly linkEndpointTools = new Map<string, dia.ToolsView>()
+  private readonly pendingLinks = new Map<string, dia.Link>()
   constructor(adapter: GraphAdapter, options: dia.Paper.Options) {
     this.adapter = adapter
-    this.graph = new dia.Graph({ language: adapter.graph.options.language ?? 'en' })
+    this.graph = new dia.Graph({
+      language: adapter.graph.options.language ?? 'en',
+      // The canvas graph and its adapter let views reach node instances.
+      canvasGraph: adapter.graph,
+      adapter,
+    })
     this.paper = new dia.Paper({
       model: this.graph,
       cellViewNamespace: namespace,
@@ -54,14 +74,13 @@ export class JointGraph implements IJointGraph {
       },
       defaultConnector: (sourcePoint, targetPoint, routePoints, opt, linkView) => {
         const link = (linkView as dia.LinkView).model as dia.Link
-        const sourcePortId = link.get('source').port
-        const isSourceIn = sourcePortId?.startsWith('in-')
-        const isSourceOut = sourcePortId?.startsWith('out-')
-
-        if (isSourceIn) {
+        const source = link.source()
+        const element = link.getSourceElement()
+        const group = source.port === undefined ? undefined : element?.getPort(source.port)?.group
+        if (group === 'in') {
           opt!.sourceDirection = connectors.curve.TangentDirections.LEFT
           opt!.targetDirection = connectors.curve.TangentDirections.RIGHT
-        } else if (isSourceOut) {
+        } else if (group === 'out') {
           opt!.sourceDirection = connectors.curve.TangentDirections.RIGHT
           opt!.targetDirection = connectors.curve.TangentDirections.LEFT
         }
@@ -79,7 +98,8 @@ export class JointGraph implements IJointGraph {
             strokeWidth: this.adapter.graph.nodeRegistry.linkStyle.strokeWidth || 1,
             stroke: this.adapter.graph.nodeRegistry.linkStyle.stroke || 'rgba(255,255,255,0.5)',
             targetMarker: { type: 'none' }
-          }
+          },
+          wrapper: { ...LINK_WRAPPER_ATTRS }
         }
       }),
       validateConnection: (sourceView, sourceMagnet, targetView, targetMagnet) => {
@@ -94,32 +114,18 @@ export class JointGraph implements IJointGraph {
 
         const sourceGroup = sourceView.findAttribute("port-group", sourceMagnet)
         const targetGroup = targetView.findAttribute("port-group", targetMagnet)
-        if (sourceGroup === 'in' && targetGroup !== 'out') {
-          return false
-        }
+        if ((sourceGroup !== 'in' && sourceGroup !== 'out') ||
+            (targetGroup !== 'in' && targetGroup !== 'out') || sourceGroup === targetGroup) return false
 
-        if (sourceGroup === 'out' && targetGroup !== 'in') {
-          return false
-        }
-
-        if (sourceView && sourceMagnet && targetMagnet && targetView) {
-          const sourcePortId = sourceView.findAttribute("port", sourceMagnet) || ''
-          const targetPortId = targetView.findAttribute("port", targetMagnet) || ''
-          const sourcePort = sourcePortId.startsWith('out-') ?
-            (sourceView.model as BlueprintNode).get('outputs')?.find(port => port.id === sourcePortId) :
-            (sourceView.model as BlueprintNode).get('inputs')?.find(port => port.id === sourcePortId)
-          const targetPort = targetPortId.startsWith('in-') ?
-            (targetView.model as BlueprintNode).get('inputs')?.find(port => port.id === targetPortId) :
-            (targetView.model as BlueprintNode).get('outputs')?.find(port => port.id === targetPortId)
-          const sourceNode = this.adapter.findNode(sourceView.model.id as string) as NodeInstanceType
-          const targetNode = this.adapter.findNode(targetView.model.id as string) as NodeInstanceType
-
-          if (sourcePort && targetPort) {
-            return this.adapter.graph.validateConnection(sourceNode, sourcePort as OutputPort, targetNode, targetPort as OutputPort)
-          }
-        }
-
-        return true;
+        const sourcePortId = sourceView.findAttribute('port', sourceMagnet)
+        const targetPortId = targetView.findAttribute('port', targetMagnet)
+        const sourceNode = this.adapter.findNode(sourceView.model.id as string) as NodeInstanceType
+        const targetNode = this.adapter.findNode(targetView.model.id as string) as NodeInstanceType
+        const outputNode = sourceGroup === 'out' ? sourceNode : targetNode
+        const inputNode = sourceGroup === 'out' ? targetNode : sourceNode
+        const output = outputNode?.outputs.find(port => port.id === (sourceGroup === 'out' ? sourcePortId : targetPortId))
+        const input = inputNode?.inputs.find(port => port.id === (sourceGroup === 'out' ? targetPortId : sourcePortId))
+        return Boolean(output && input && this.adapter.graph.validateConnection(outputNode, output, inputNode, input))
       },
       ...options
     })
@@ -210,7 +216,6 @@ export class JointGraph implements IJointGraph {
   public addNode(instance: NodeInstanceType, style?: NodeStyle) {
     const inputs = instance.inputs
     const outputs = instance.outputs
-
     const node = new custom.BlueprintNode({
       id: instance.id,
       title: instance.title ?? '',
@@ -221,8 +226,10 @@ export class JointGraph implements IJointGraph {
       style: style ?? {},
       inputs: inputs,
       outputs: outputs,
-      nodeType: instance.type,
-      values: { ...instance.values }
+      kind: instance.kind,
+      values: { ...instance.inputValues },
+      editors: this.adapter.graph.editors,
+      nodeRenderer: this.adapter.graph.nodeRenderers.get(instance.definitionId),
     }) as BlueprintNode
     this.graph.addCell(node)
     return node
@@ -237,18 +244,12 @@ export class JointGraph implements IJointGraph {
   }
 
   public addLink(link: LinkInstanceType, style?: LinkStyle) {
-    const jointLink = new shapes.standard.Link({
-      id: link.id,
-      source: { id: link.source.id, port: link.source.port },
-      target: { id: link.target.id, port: link.target.port },
-      attrs: {
-        line: {
-          stroke: style?.stroke ?? '#ffffff',
-          strokeWidth: style?.strokeWidth ?? 2,
-          targetMarker: { type: 'none' }
-        }
-      }
-    }) as dia.Link
+    const jointLink = this.createLinkModel(
+      link.id,
+      { id: link.source.id, port: link.source.port },
+      { id: link.target.id, port: link.target.port },
+      style
+    )
 
     const source = jointLink.get('source')
     const target = jointLink.get('target')
@@ -267,7 +268,108 @@ export class JointGraph implements IJointGraph {
     return jointLink
   }
 
+  private createLinkModel(
+    id: string | undefined,
+    source: JointLinkEnd,
+    target: JointLinkEnd,
+    style?: LinkStyle
+  ): dia.Link {
+    return new shapes.standard.Link({
+      id,
+      source,
+      target,
+      attrs: {
+        line: {
+          stroke: style?.stroke ?? this.adapter.graph.nodeRegistry.linkStyle.stroke ?? '#ffffff',
+          strokeWidth: style?.strokeWidth ?? this.adapter.graph.nodeRegistry.linkStyle.strokeWidth ?? 2,
+          targetMarker: { type: 'none' }
+        },
+        wrapper: { ...LINK_WRAPPER_ATTRS }
+      }
+    }) as dia.Link
+  }
+
+  /** Draw a temporary link while the add-and-connect palette is open. */
+  public addPendingLink(id: string, source: JointLinkEnd, target: JointLinkEnd, style?: LinkStyle) {
+    const existing = this.pendingLinks.get(id)
+    if (existing) this.graph.removeCells([existing])
+    const jointLink = this.createLinkModel(id, source, target, style)
+    this.graph.addCell(jointLink)
+    this.pendingLinks.set(id, jointLink)
+    return jointLink
+  }
+
+  /** Promote a pending link without recreating its JointJS cell. */
+  public releasePendingLink(id: string) {
+    const link = this.pendingLinks.get(id)
+    this.pendingLinks.delete(id)
+    return link
+  }
+
+  /** Remove a pending link that the user cancelled. */
+  public discardPendingLink(id: string) {
+    const link = this.pendingLinks.get(id)
+    this.pendingLinks.delete(id)
+    if (link) this.graph.removeCells([link])
+  }
+
+  /**
+   * Show source/target handles on a single selected link.
+   *
+   * Handles are selection-scoped so they never cover a port during ordinary
+   * connection dragging. Replay mode has no editable endpoints.
+   */
+  public showLinkEndpointTools(link: LinkInstanceType | null) {
+    const selectedId = this.adapter.graph.isReplayMode() ? null : link?.id ?? null
+    for (const id of [...this.linkEndpointTools.keys()]) {
+      if (id === selectedId) continue
+      const view = this.paper.findViewByModel(id)
+      if (view) view.removeTools()
+      this.linkEndpointTools.delete(id)
+    }
+    if (!selectedId || this.linkEndpointTools.has(selectedId)) return
+
+    const jointLink = this.adapter.cellsMap.get(selectedId)?.jointCell
+    if (!(jointLink instanceof dia.Link)) return
+    const view = this.paper.findViewByModel(jointLink) as dia.LinkView | undefined
+    if (!view) return
+
+    const tools = new dia.ToolsView({
+      tools: [
+        new linkTools.SourceArrowhead({ scale: 0.75 }),
+        new linkTools.TargetArrowhead({ scale: 0.75 }),
+      ],
+    })
+    view.addTools(tools)
+    this.linkEndpointTools.set(selectedId, tools)
+  }
+
+  /** Reconcile port highlights after a link endpoint changes. */
+  public syncPortHighlights(ends: LinkEnds) {
+    for (const end of [ends.source, ends.target]) {
+      const view = this.paper.findViewByModel(end.id) as BlueprintNodeView | undefined
+      if (!view || !end.port) continue
+      const used = this.adapter.graph.getLinks().some((link) =>
+        (link.source.id === end.id && link.source.port === end.port) ||
+        (link.target.id === end.id && link.target.port === end.port)
+      )
+      if (used) view.highlightPort(end.port)
+      else view.unhighlightPort(end.port)
+    }
+  }
+
+  private removeLinkEndpointTools(id: string) {
+    const tools = this.linkEndpointTools.get(id)
+    if (!tools) return
+    const view = this.paper.findViewByModel(id)
+    if (view) view.removeTools()
+    this.linkEndpointTools.delete(id)
+  }
+
   public removeCells(cells: dia.Cell[]) {
+    for (const cell of cells) {
+      if (cell.isLink()) this.removeLinkEndpointTools(cell.id as string)
+    }
     this.graph.removeCells(cells)
     this.ungroupCells(cells as Array<dia.Element | dia.Link>)
   }
@@ -283,7 +385,12 @@ export class JointGraph implements IJointGraph {
       if (cell instanceof dia.Element) {
         const elementView = this.paper.findViewByModel(cell)
         if (!elementView) return
-        highlighters.mask.add(elementView, "base-node-body", 'highlighter-selected', {
+        // A custom renderer may not draw the built-in body, so it keeps a
+        // transparent selection shape for the highlighter.
+        const selector = (cell as BlueprintNode).get('nodeRenderer')
+          ? 'base-node-selection'
+          : 'base-node-body'
+        highlighters.mask.add(elementView, selector, 'highlighter-selected', {
           layer: dia.Paper.Layers.FRONT,
           padding: 2,
           attrs: {
@@ -340,6 +447,8 @@ export class JointGraph implements IJointGraph {
     this.scrollerController.stopListening()
     this.selectionController.stopListening()
     this.groupEffectController.stopListening()
+    this.linkEndpointTools.clear()
+    this.pendingLinks.clear()
     this.graph.clear()
     this.paper.remove()
     window.removeEventListener('keydown', this.onKeyDown)
@@ -347,6 +456,8 @@ export class JointGraph implements IJointGraph {
   }
 
   public clear() {
+    this.linkEndpointTools.clear()
+    this.pendingLinks.clear()
     this.graph.clear()
     this.clearHighlights()
   }

@@ -5,9 +5,9 @@ import type { CanvasGraph } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopWheel } from '../helpers'
-import { formatExecutionValue } from '../executionFormat'
+import { executionAttempt, executionPorts, executionStatus } from './executionDetails'
 
-/** Execution previews for completed or active breakpoint nodes; delay closing for card entry. */
+/** Live execution status and available port data for the hovered node. */
 export class NodeExecutionPreview extends OverlayComponent {
   private readonly graph: CanvasGraph
   private node: NodeInstanceType | null = null
@@ -27,8 +27,6 @@ export class NodeExecutionPreview extends OverlayComponent {
 
   open(node: NodeInstanceType, anchor: Element) {
     this.close()
-    if (node.type === 'start') return
-    if (!this.previewStatus(node.id)) return
     this.node = node
     this.anchor = anchor
     this.nodeHovered = true
@@ -42,14 +40,13 @@ export class NodeExecutionPreview extends OverlayComponent {
     this.scheduleHide()
   }
 
-  refresh(nodeId: string) {
-    if (this.node?.id !== nodeId) return
-    if (!this.previewStatus(nodeId)) this.close()
-    else this.render()
+  refresh(nodeId?: string) {
+    if (nodeId !== undefined && this.node?.id !== nodeId) return
+    this.render()
   }
 
   isOpen() {
-    return this.node !== null
+    return this.host.childElementCount > 0
   }
 
   close = () => {
@@ -93,20 +90,33 @@ export class NodeExecutionPreview extends OverlayComponent {
 
   private previewStatus(nodeId: string) {
     if (this.graph.executionStatus === 'paused' && this.graph.pausedNodeId === nodeId) return 'paused'
-    return this.graph.getNodeExecutionStatus(nodeId) === 'completed' ? 'completed' : null
+    const status = this.graph.getNodeExecutionStatus(nodeId)
+    return status === 'idle' && this.graph.executionStatus === 'idle' && !this.graph.isReplayMode() ? null : status
   }
 
   private render() {
     if (!this.node || !this.anchor) return
+    const status = this.previewStatus(this.node.id)
+    if (status === null) {
+      if (!this.nodeHovered) this.close()
+      else {
+        this.cardHovered = false
+        this.commit(nothing)
+      }
+      return
+    }
+    const stored = this.graph.getNodeExecutionData(this.node.id)
+    const showData = this.node.type !== 'start' && (status === 'completed' || status === 'paused' || !!stored?.attempt)
+    const data = showData ? stored : undefined
+    const language = this.graph.options.language
+    const nodeName = this.node.title || this.node.nodeType
     const bounds = this.overlay.rect()
     const anchor = this.anchor.getBoundingClientRect()
-    const data = this.graph.getNodeExecutionData(this.node.id)
-    const paused = this.previewStatus(this.node.id) === 'paused'
     this.commit(html`
       <div
-        class="bpgraph-node-preview"
+        class=${showData ? 'bpgraph-node-preview' : 'bpgraph-node-preview is-status-only'}
         role="tooltip"
-        aria-label=${this.t('{node} execution data', { node: this.node.title || this.node.nodeType })}
+        aria-label=${this.t(showData ? '{node} execution data' : '{node} execution status', { node: nodeName })}
         tabindex="0"
         style=${styleMap({
           maxWidth: `${Math.max(0, bounds.width - 24)}px`,
@@ -119,13 +129,14 @@ export class NodeExecutionPreview extends OverlayComponent {
         @wheel=${stopWheel}
       >
         <header class="bpgraph-node-preview-header">
-          <strong>${this.node.title || this.node.nodeType}</strong>
-          <span class=${paused ? 'is-paused' : ''}>${paused ? this.t('Paused at breakpoint') : this.t('Completed')}</span>
+          <strong>${nodeName}</strong>
+          ${executionStatus(status, language)}
         </header>
         ${data ? html`
-          ${this.section(this.t('Inputs'), data.inputs)}
-          ${paused ? nothing : this.section(this.t('Outputs'), data.outputs)}
-        ` : html`<p class="bpgraph-node-preview-empty">${this.t('No execution data')}</p>`}
+          ${data.attempt ? executionAttempt(data.attempt, status, language) : nothing}
+          ${executionPorts('Inputs', data.inputs, language)}
+          ${status === 'paused' ? nothing : executionPorts('Outputs', data.outputs, language)}
+        ` : showData ? html`<p class="bpgraph-node-preview-empty">${this.t('No execution data')}</p>` : nothing}
       </div>
     `)
     const card = this.host.querySelector<HTMLElement>('.bpgraph-node-preview')!
@@ -135,19 +146,5 @@ export class NodeExecutionPreview extends OverlayComponent {
     const left = right + width <= bounds.width - 12 ? right : anchor.left - bounds.left - width - 12
     card.style.left = `${Math.max(12, Math.min(left, bounds.width - width - 12))}px`
     card.style.top = `${Math.max(12, Math.min(anchor.top - bounds.top, bounds.height - height - 12))}px`
-  }
-
-  private section(label: string, values: Record<string, unknown>) {
-    const entries = Object.entries(values)
-    return html`
-      <section class="bpgraph-node-preview-section">
-        <h4>${label}</h4>
-        ${entries.length ? html`<dl>
-          ${entries.map(([name, value]) => html`
-            <div><dt>${name}</dt><dd><pre>${formatExecutionValue(value, this.graph.options.language)}</pre></dd></div>
-          `)}
-        </dl>` : html`<p class="bpgraph-node-preview-empty">${this.t('No data ports')}</p>`}
-      </section>
-    `
   }
 }

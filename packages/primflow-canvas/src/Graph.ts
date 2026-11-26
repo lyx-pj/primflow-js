@@ -1,3 +1,4 @@
+import { validateGraphTypes, type GraphTypeDiagnostic } from '@lyx-pj/primflow-model'
 import type { CanvasLanguage } from './ui/i18n'
 import { GraphAdapter } from './adapters/GraphAdapter'
 import {
@@ -9,14 +10,18 @@ import {
   mergeDeep,
   type NodeOptions,
   type NodeClassType,
+  type InputPort,
   type OutputPort,
   type NodeInstanceType,
   type NodeExecutionStatus,
   type JsonGraph
 } from '@lyx-pj/primflow-model'
+import { resolveLinkColor } from './utils/portColors'
 import { UndoManager } from './UndoManager'
 import { BlueprintModel } from './GraphModel'
 import { Util } from './utils'
+import { EditorRegistry } from './ui/editors'
+import { NodeRendererRegistry } from './ui/nodeRenderers'
 import type {
   CanvasExecutionStatus,
   ContextMenuOptions,
@@ -46,11 +51,11 @@ export interface GraphOptions {
   palette?: boolean | PaletteOptions,
   /** Built-in context menu: enabled by default; false disables it. */
   contextMenu?: boolean | ContextMenuOptions,
-  /** Built-in single-node panel: enabled by default; false disables it. */
+  /** Built-in right-hand node panel: enabled and open by default; false disables it. */
   nodePanel?: boolean | NodePanelOptions,
   /** Right-hand debug panel; enabling it adds a toolbar visibility toggle. */
   debugPanel?: boolean | DebugPanelOptions,
-  /** Transparent toolbar, shown when actions or debug panels are configured. */
+  /** Transparent toolbar, shown when actions or panel toggles are configured. */
   toolbar?: boolean | ToolbarOptions,
   /** Host-managed return navigation for external views; embedded levels return first. */
   navigation?: {
@@ -95,8 +100,8 @@ export interface IGraph<NodeDefs extends Record<string, NodeClassType>> {
    *
    * @example
    * ```
-   * import { Graph, NodeRegistry, Node } from '@lyx-pj/primflow-canvas'
-   * class NodeA extends Node {}
+   * import { Graph, NodeRegistry, defineNode } from '@lyx-pj/primflow-canvas'
+   * const NodeA = defineNode({ definition: { inputs: [], outputs: [] } })
    * const registry = new NodeRegistry()
    *  .register('nodeA', NodeA)
    * const graph = new Graph(registry, {
@@ -228,7 +233,7 @@ export interface IGraph<NodeDefs extends Record<string, NodeClassType>> {
    * @param targetPort The target port.
    * @returns Whether the connection is valid.
    */
-  validateConnection: (sourceNode: NodeInstanceType, sourcePort: OutputPort, targetNode: NodeInstanceType, targetPort: OutputPort) => boolean
+  validateConnection: (sourceNode: NodeInstanceType, sourcePort: OutputPort, targetNode: NodeInstanceType, targetPort: InputPort) => boolean
 
   /**
    * Gets the link color when actively creating a connection by dragging on the canvas.
@@ -239,7 +244,7 @@ export interface IGraph<NodeDefs extends Record<string, NodeClassType>> {
     sourceNode: NodeInstanceType | null,
     targetNode: NodeInstanceType | null,
     sourcePort: OutputPort | null,
-    targetPort: OutputPort | null
+    targetPort: InputPort | null
   ): string
 
   /**
@@ -274,6 +279,7 @@ export interface IGraph<NodeDefs extends Record<string, NodeClassType>> {
 
 type GraphEventPayload = {
   'changed': [event: ChangedEvent]
+  'type:diagnostics': [diagnostics: GraphTypeDiagnostic[]]
 
   /** Notify UI after undo history updates to avoid reading pre-commit state. */
   'history:changed': []
@@ -346,6 +352,10 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   public container?: HTMLElement
   public _model!: BlueprintModel
   public nodeRegistry: NodeRegistry<NodeDefs>
+  /** Application-provided editors for port and panel controls, keyed by data type. */
+  public readonly editors = new EditorRegistry()
+  /** Application-provided node renderers, keyed by definition ID. */
+  public readonly nodeRenderers = new NodeRendererRegistry()
   private _defaultScale = 1
   private adapter: GraphAdapter
   private viewDispose?: () => void
@@ -353,6 +363,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   private currentExecutionStatus: CanvasExecutionStatus = 'idle'
   private currentPausedNodeId: string | null = null
   private nodeExecutionStatuses = new Map<string, NodeExecutionStatus>()
+  private readonly nodeProgress = new Map<string, string>()
   private nodeExecutionData = new Map<string, NodeExecutionData>()
   /** Editing graph saved before replay; null when replay is inactive. */
   private replayBackup: {
@@ -400,11 +411,29 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     return this.nodeExecutionData.get(nodeId)
   }
 
+  public getNodeProgress(nodeId: string): string | undefined {
+    return this.isReplayMode() ? undefined : this.nodeProgress.get(nodeId)
+  }
+
+  public setNodeProgress(nodeId: string, text: string) {
+    this.nodeProgress.set(nodeId, text)
+    this.adapter?.ui?.refreshNodeExecutionPreview(nodeId)
+  }
+
+  public clearNodeProgress() {
+    const ids = [...this.nodeProgress.keys()]
+    this.nodeProgress.clear()
+    for (const id of ids) this.adapter?.ui?.refreshNodeExecutionPreview(id)
+  }
+
   /** Synchronize states and actual port values; clear stale data on rerun. */
   public setNodeExecutionStatus(nodeId: string, status: NodeExecutionStatus, data?: NodeExecutionData) {
     const paused = this.currentExecutionStatus === 'paused' && this.currentPausedNodeId === nodeId
-    if ((status === 'completed' || paused) && data) this.nodeExecutionData.set(nodeId, data)
-    else if (status !== 'completed') this.nodeExecutionData.delete(nodeId)
+    if (data && (status === 'completed' || paused || (status !== 'idle' && data.attempt))) {
+      this.nodeExecutionData.set(nodeId, data)
+    } else if (status !== 'completed') {
+      this.nodeExecutionData.delete(nodeId)
+    }
     if (status === this.getNodeExecutionStatus(nodeId)) {
       this.adapter?.ui?.refreshNodeExecutionPreview(nodeId)
       return
@@ -523,7 +552,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
       this.container.focus()
     }
     this.adapter = new GraphAdapter(this as unknown as Graph<{}>, options)
-    this.model = new BlueprintModel()
+    this.model = new BlueprintModel(undefined, undefined, registry.dataTypes)
     this.initialize()
   }
 
@@ -647,6 +676,31 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     return links
   }
 
+  /**
+   * Replace both ends of an existing link.
+   *
+   * Adapters use this for endpoint reconnection. The change is not recorded
+   * here; callers decide whether it belongs to an undo transaction.
+   */
+  public applyLinkEnds(link: LinkInstanceType, ends: LinkEnds) {
+    const before: LinkEnds = {
+      source: { ...link.source },
+      target: { ...link.target },
+    }
+    if (
+      before.source.id === ends.source.id && before.source.port === ends.source.port &&
+      before.target.id === ends.target.id && before.target.port === ends.target.port
+    ) {
+      return
+    }
+    link.source = { ...ends.source }
+    link.target = { ...ends.target }
+    this.adapter?.updateLink(link)
+    this.adapter?.syncPortHighlights(before)
+    this.adapter?.syncPortHighlights(ends)
+    this.raiseChangedEvent(ChangedEventType.Property, 'connection', link, before, ends)
+  }
+
   /** @inheritdoc {@link IGraph.select} */
   public select(item: NodeInstanceType | LinkInstance) {
     this.adapter.select(item)
@@ -718,6 +772,31 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   /** Refresh debug panel data; do not evaluate data while closed. */
   public refreshDebugPanel() {
     this.adapter?.ui?.refreshDebugPanel()
+  }
+
+  /** Whether the right-hand node panel is open; always false without `nodePanel` configuration. */
+  public isNodePanelOpen() {
+    return this.adapter?.ui?.isNodePanelOpen() ?? false
+  }
+
+  /** Open the right-hand panel; the Node tab shows the current selection or the overview. */
+  public openNodePanel() {
+    this.adapter?.ui?.openNodePanel()
+  }
+
+  /** Close the right-hand panel without changing node selection. */
+  public closeNodePanel() {
+    this.adapter?.ui?.closeNodePanel()
+  }
+
+  /** Toggle right-hand panel visibility. */
+  public toggleNodePanel() {
+    this.adapter?.ui?.toggleNodePanel()
+  }
+
+  /** Re-render the right-hand panel content; skipped while closed. */
+  public refreshNodePanel() {
+    this.adapter?.ui?.refreshNodePanel()
   }
 
   /** @inheritdoc {@link IGraph.setContainer} */
@@ -973,7 +1052,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
       NodeClass = nodeType as NodeDefs[K]
     }
 
-    return new Graph.NodeInstance(NodeClass, options)
+    return new Graph.NodeInstance(NodeClass, options, this.nodeRegistry.dataTypes)
   }
 
   /** @inheritdoc {@link IGraph.createLinkInstance} */
@@ -987,14 +1066,14 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     _sourceNode: NodeInstanceType,
     _targetNode: NodeInstanceType,
     sourcePort: OutputPort,
-    targetPort: OutputPort): string
+    targetPort: InputPort): string
   {
-    const defaultLinkStyle = this.nodeRegistry.linkStyle
-    if (defaultLinkStyle.byPortType) {
-      const color = getLinkColor(defaultLinkStyle.byPortType, sourcePort, targetPort)
-      if (color) return color
-    }
-    return defaultLinkStyle.stroke || 'rgba(255,255,255,0.5)'
+    return resolveLinkColor(
+      this.nodeRegistry.nodeStyle.ports?.colors,
+      this.nodeRegistry.linkStyle.stroke || 'rgba(255,255,255,0.5)',
+      sourcePort.type,
+      targetPort.type
+    )
   }
 
   public enterSubgraph(subgraphId: string) {
@@ -1053,38 +1132,8 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   }
 
   /** @inheritdoc {@link IGraph.validateConnection} */
-  public validateConnection(_sourceNode: NodeInstanceType, sourcePort: OutputPort, _targetNode: NodeInstanceType, targetPort: OutputPort): boolean {
-    const sourceType = sourcePort.type
-    const targetType = targetPort.type
-    switch (sourceType) {
-      case 'exec':
-        if (targetType !== 'exec') return false
-        break
-      case 'number':
-        if (targetType !== 'number' && targetType !== 'any') return false
-        break
-      case 'boolean':
-        if (targetType !== 'boolean' && targetType !== 'any') return false
-        break
-      case 'array':
-        if (targetType !== 'array' && targetType !== 'any') return false
-        break
-      case 'object':
-        if (targetType !== 'object' && targetType !== 'any') return false
-        break
-      case 'spacer':
-        return false
-      case 'any':
-        if (targetType === 'exec') return false
-        break
-      case 'string':
-        if (targetType !== 'string' && targetType !== 'any' && targetType !== 'textarea') return false
-        break
-      case 'textarea':
-        if (targetType !== 'textarea' && targetType !== 'string' && targetType !== 'any') return false
-        break
-    }
-    return true
+  public validateConnection(_sourceNode: NodeInstanceType, sourcePort: OutputPort, _targetNode: NodeInstanceType, targetPort: InputPort): boolean {
+    return this.nodeRegistry.dataTypes.checkConnection(sourcePort.type, targetPort.type)
   }
 
   public raiseChangedEvent(change: ChangedEventType, propertyName: string, object: unknown, oldValue: unknown, newValue: unknown) {
@@ -1135,10 +1184,17 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     return this.model.toJSON()
   }
 
+  public getTypeDiagnostics(json: JsonGraph = this.toJSON()) {
+    return validateGraphTypes(json, this.nodeRegistry)
+  }
+
   /** @inheritdoc {@link IGraph.fromJSON} */
   public fromJSON(json: JsonGraph | string, options: { keepStartPorts?: boolean } = {}) {
+    const model = BlueprintModel.fromJSON(this as unknown as Graph<{}>, json, options)
     this.model.setGraph(null)
-    this.model = BlueprintModel.fromJSON(this as unknown as Graph<{}>, json, options)
+    this.model = model
+    this.clearNodeProgress()
+    this.emit('type:diagnostics', this.getTypeDiagnostics())
     return this.model
   }
 
@@ -1151,6 +1207,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   }
 
   private reset() {
+    this.clearNodeProgress()
     this.resetNodeExecutionStatuses()
     this.setExecutionStatus('idle')
     if (this.model) this.model.clear()
@@ -1201,17 +1258,11 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     const sourcePortId = link.source.port!
     const targetPortId = link.target.port!
     if (!sourcePortId || !targetPortId) throw new Error(`Both source port and target port must be specified in the link.`)
-    if (sourcePortId.startsWith('in-') && targetPortId.startsWith('in-')) throw new Error(`Cannot connect two input ports: "${sourcePortId}" and "${targetPortId}".`)
-    if (sourcePortId.startsWith('out-') && targetPortId.startsWith('out-')) throw new Error(`Cannot connect two output ports: "${sourcePortId}" and "${targetPortId}".`)
-    const sourcePort = sourcePortId.startsWith('out-') ?
-      sourceNode.outputs.find(port => port.id === sourcePortId) :
-      sourceNode.inputs.find(port => port.id === sourcePortId)
-    if (!sourcePort) throw new Error(`Source port "${link.source.port}" not found in node "${sourceNode}".`)
-    const targetPort = targetPortId.startsWith('in-') ?
-      targetNode.inputs.find(port => port.id === targetPortId) :
-      targetNode.outputs.find(port => port.id === targetPortId)
-    if (!targetPort)  throw new Error(`Target port "${link.target.port}" not found in node "${targetNode}".`)
-    if (!this.validateConnection(sourceNode, sourcePort as OutputPort, targetNode, targetPort as OutputPort)) {
+    const sourcePort = sourceNode.outputs.find(port => port.id === sourcePortId)
+    if (!sourcePort) throw new Error(`Source output port "${sourcePortId}" not found in node "${sourceNode}".`)
+    const targetPort = targetNode.inputs.find(port => port.id === targetPortId)
+    if (!targetPort) throw new Error(`Target input port "${targetPortId}" not found in node "${targetNode}".`)
+    if (!this.validateConnection(sourceNode, sourcePort, targetNode, targetPort)) {
       throw new Error(
         `Port type mismatch: cannot connect ${sourceNode} [${sourcePort.name}:${sourcePort.type}] to ${targetNode} [${targetPort.name}:${targetPort.type}].`
       )
@@ -1229,12 +1280,17 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
   }
 }
 
+export interface LinkEnds {
+  source: { id: string, port: string }
+  target: { id: string, port: string }
+}
+
 class LinkInstance {
   style?: { stroke?: string, strokeWidth?: number }
   id?: string
-  source: { id: string, port: string }
-  target: { id: string, port: string }
-  constructor(source: { id: string, port: string }, target: { id: string, port: string }) {
+  source: LinkEnds['source']
+  target: LinkEnds['target']
+  constructor(source: LinkEnds['source'], target: LinkEnds['target']) {
     this.source = source
     this.target = target
   }
@@ -1247,39 +1303,3 @@ Graph.NodeInstance = NodeInstance
 Graph.LinkInstance = LinkInstance
 
 export type LinkInstanceType = InstanceType<typeof Graph.LinkInstance>
-
-const getLinkColor = (() => {
-  const cachedColors = {} as Record<string, string>
-  const currentColorIndexMap = {} as Record<string, number>
-  return (colors: {[key: string]: string[]}, sourcePort: OutputPort, targetPort: OutputPort) => {
-    const source = (sourcePort.id || '').startsWith('out-') ? sourcePort : targetPort
-    const target = (targetPort.id || '').startsWith('in-') ? targetPort : sourcePort
-    if (!Array.isArray(colors[source.type]) || !Array.isArray(colors[target.type])) return
-    const sourceId = source.id || ''
-    const targetId = target.id || ''
-
-    const cachedColor = cachedColors[sourceId + targetId]
-    if (cachedColor) return cachedColor
-
-    const sourceCachedColor = cachedColors[sourceId]
-    const targetCachedColor = cachedColors[targetId]
-
-    if (sourceCachedColor) {
-      cachedColors[sourceId + targetId] = sourceCachedColor
-      return sourceCachedColor
-    }
-    
-    if (targetCachedColor) {
-      cachedColors[sourceId + targetId] = targetCachedColor
-      return targetCachedColor
-    }
-
-    currentColorIndexMap[source.type] = currentColorIndexMap[source.type] || 0
-    const color = colors[source.type][currentColorIndexMap[source.type]]
-    cachedColors[sourceId] = color
-    cachedColors[targetId] = color
-    currentColorIndexMap[source.type] = (currentColorIndexMap[source.type] + 1) % colors[source.type].length
-    return color
-  }
-})()
-

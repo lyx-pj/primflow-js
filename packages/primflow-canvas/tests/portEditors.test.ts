@@ -94,7 +94,7 @@ test('text updates preserve editing and caret position and restore model values 
 
 test('clicking a dropdown retains its overlay, selection writes values, and blank clicks close it', () => {
   const { model, editor, view } = mountEditor({
-    id: 'in-mode', name: 'mode', type: 'select',
+    id: 'in-mode', name: 'mode', type: 'string', editor: 'select',
     _options: [{ label: 'Option A', value: 'a' }, { label: 'Option B', value: 'b' }],
   }, 'a')
   const paper = document.createElement('div')

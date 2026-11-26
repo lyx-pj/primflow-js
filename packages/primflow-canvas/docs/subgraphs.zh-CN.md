@@ -8,9 +8,9 @@
 
 | 节点状态 | 画布行为 |
 | --- | --- |
-| `subgraph` 节点没有 `subgraphId` | 生成 id 并创建内嵌子图区域 |
-| 有 `subgraphId`，当前图存在同名区域 | 内嵌子图，双击可进入编辑 |
-| 有 `subgraphId`，当前图没有同名区域 | 外部子图引用：不自动创建空区域，`enterSubgraph()` 不进入，应用负责打开、保存和执行时注入内容 |
+| `subgraph` 节点没有 `targetGraphId` | 生成 id 并创建内嵌子图区域 |
+| 有 `targetGraphId`，当前图存在同名区域 | 内嵌子图，双击可进入编辑 |
+| 有 `targetGraphId`，当前图没有同名区域 | 外部子图引用：不自动创建空区域，`enterSubgraph()` 不进入，应用负责打开、保存和执行时注入内容 |
 
 画布创建内嵌子图时生成带参数端口的 `Start` 和带 `result` 数据端口的 `End`（id 分别为 `start-<subgraphId>`、`end-<subgraphId>`）。外部子图引用只保存 id，文件由应用管理。
 
@@ -42,10 +42,11 @@ graph.setOptions({
 
 ## 容器节点的面板
 
-容器节点（内嵌子图与外部子图引用）首次单击时，节点面板会在约 200ms 的短暂防闪窗口后展开：双击时立即取消待展开任务并收起已有面板，不依赖应用完成外部子图的异步加载，避免切换视图前面板先弹出。面板已经打开时改选其他节点（包括容器节点）会立即更新为新节点数据，不再等防闪窗口。
+节点面板由工具栏按钮控制，默认打开；选中容器节点（内嵌子图与外部子图引用）不会自动弹出面板。面板已经打开时，选中容器节点会显示它的设置；双击进入子图或循环体后，面板保持打开并回到视图总览，直到在新视图中选中节点。外部子图异步切换失败时，面板不依赖加载结果，保持当前内容。
 
 ## 测试
 
 - [startNodes.test.ts](../tests/startNodes.test.ts)：内嵌子图创建、Start 端口保留、保存加载。
 - [viewport.test.ts](../tests/viewport.test.ts)、[ui.test.ts](../tests/ui.test.ts)：返回导航、菜单与面板交互。
 - [replay.test.ts](../tests/replay.test.ts)：回溯期间禁止导航、退出后恢复编辑图。
+- [previewCache.test.ts](../tests/previewCache.test.ts)、[subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts)、[regionSchematic.test.ts](../tests/regionSchematic.test.ts)：缓存 key、持久化数据校验、内嵌区域首帧示意图、缓存即时挂载和后台校验。

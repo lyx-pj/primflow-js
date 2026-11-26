@@ -11,6 +11,29 @@ export {
 
 export { NodeToolsView, NodeToolView } from './NodeToolsView'
 
+export { EditorRegistry } from './ui/editors'
+
+export { NodeRendererRegistry } from './ui/nodeRenderers'
+
+export type { NodeRendererContext, NodeRendererRegistration, PortLayoutContext } from './ui/nodeRenderers'
+
+export type {
+  EditorScope,
+  EditorRegistration,
+  PortEditorRegistration,
+  PanelEditorRegistration,
+  PortEditorContext,
+  PanelEditorContext,
+  PortOverlayHost,
+  PortOverlayOptions,
+  OverlayPlacement
+} from './ui/editors'
+
+// Reexport the template helpers so an application can build editor controls
+// without depending on lit-html directly.
+export { html, nothing, type TemplateResult } from 'lit-html'
+export { ref } from 'lit-html/directives/ref.js'
+
 export type {
   CanvasExecutionStatus,
   NodeExecutionData,
@@ -21,14 +44,18 @@ export type {
   ContextMenuItem,
   ContextMenuContext,
   NodePanelOptions,
+  PanelRenderContext,
+  PanelOverviewContext,
+  PanelGlobalSettingsContext,
+  PanelSection,
+  PanelSectionContext,
+  PanelSectionId,
   DebugPanelOptions,
   DebugPanelData,
   DebugRecord,
   DebugRecordStatus,
   DebugLogEntry,
   DebugLogLevel,
-  DebugChainItem,
-  DebugChainKind,
   DebugScope,
   ToolbarOptions,
   ToolbarAction,
@@ -38,7 +65,7 @@ export type {
 // Reexport model's public API from the canvas entry point.
 // Consumers can access graph editing through one package.
 export {
-  Node,
+  defineNode,
   NodeInstance,
   NodeRegistry,
   VariableManager,

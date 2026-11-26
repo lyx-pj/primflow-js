@@ -1,7 +1,8 @@
+import { isBuiltinDataType, isDataPort } from '@lyx-pj/primflow-model'
 import type { Graph, NodeInstanceType, LinkInstanceType } from '../Graph'
 import { BlueprintModel } from '../GraphModel';
-import type { OutputPort, LinkStyle, JsonNode, JsonLink, JsonVariable, JsonGraph } from '@lyx-pj/primflow-model';
-import { normalizeStartNodes } from '@lyx-pj/primflow-model'
+import type { LinkStyle, JsonNode, JsonLink, JsonVariable, JsonGraph } from '@lyx-pj/primflow-model';
+import { normalizeLoopEntryOutputs, normalizeStartNodes, validateJsonNode } from '@lyx-pj/primflow-model'
 
 export type { JsonNode, JsonLink, JsonVariable, JsonGraph }
 
@@ -11,18 +12,25 @@ export function serializeNodes(nodes: NodeInstanceType[]): JsonNode[] {
     const jsonNode: JsonNode = {
       position: { ...node.position },
       id: node.id,
-      type: node.type,
-      nodeType: node.nodeType,
-      values: { ...node.values },
+      definitionId: node.definitionId,
+      kind: node.kind,
+      inputValues: { ...node.inputValues },
       inputs: node.inputs.map(input => ({ name: input.name, id: input.id! })),
       outputs: node.outputs.map(output => ({ name: output.name, id: output.id! })),
     }
 
-    if (node.data) jsonNode.data = node.data
+    for (const [ports, jsonPorts] of [[node.inputs, jsonNode.inputs], [node.outputs, jsonNode.outputs]] as const) {
+      for (const [index, port] of ports.entries()) {
+        if (isDataPort(port.type) && !isBuiltinDataType(port.type)) {
+          jsonPorts[index].type = port.type
+        }
+      }
+    }
+    if (node.data !== undefined) jsonNode.data = structuredClone(node.data)
     if (node.breakpoint) jsonNode.breakpoint = true
-    if (node.states.title) jsonNode.title = node.states.title
+    if (node.states.title !== undefined) jsonNode.title = node.states.title
     if (node.states.style) jsonNode.style = node.states.style
-    if (node.subgraphId) jsonNode.subgraphId = node.subgraphId
+    if (node.targetGraphId !== undefined) jsonNode.targetGraphId = node.targetGraphId
     if (node.loop) jsonNode.loop = structuredClone(node.loop)
     if (node.states.inputs) jsonNode.inputs = node.states.inputs.map(input => {
       const obj: JsonNode['inputs'][number] = {
@@ -31,9 +39,13 @@ export function serializeNodes(nodes: NodeInstanceType[]): JsonNode[] {
         type: input.type,
       }
       if (input.label) obj.label = input.label
+      if (input.editor !== undefined) obj.editor = input.editor
+      if (input.editorWidth !== undefined) obj.editorWidth = input.editorWidth
       if (Array.isArray(input.options)) obj.options = input.options ? Array.from(input.options) : undefined
       if (input.showInput !== undefined) obj.showInput = input.showInput
       if (input.showPort !== undefined) obj.showPort = input.showPort
+      if (input.showLabel !== undefined) obj.showLabel = input.showLabel
+      if (input.labelPosition) obj.labelPosition = { ...input.labelPosition }
       return obj
     })
       if (node.states.outputs) jsonNode.outputs = node.states.outputs.map(output => {
@@ -43,6 +55,8 @@ export function serializeNodes(nodes: NodeInstanceType[]): JsonNode[] {
           type: output.type,
         }
         if (output.label) obj.label = output.label
+        if (output.showLabel !== undefined) obj.showLabel = output.showLabel
+        if (output.labelPosition) obj.labelPosition = { ...output.labelPosition }
         return obj
       })
     jsonNodes.push(jsonNode)
@@ -104,23 +118,30 @@ export function toJSON(model: BlueprintModel): JsonGraph {
 export function deserializeNodes(graph: Graph, jsonNodes: JsonNode[]): NodeInstanceType[] {
   const nodes: NodeInstanceType[] = []
   for (const jsonNode of jsonNodes) {
-    const node = graph.createNodeInstance(jsonNode.nodeType as unknown as never, {
+    validateJsonNode(jsonNode)
+    const outputs = normalizeLoopEntryOutputs(jsonNode)
+    const definition = graph.nodeRegistry.getDefinition(jsonNode.definitionId)
+    const node = graph.createNodeInstance(jsonNode.definitionId as never, {
       position: { ...jsonNode.position },
       title: jsonNode.title,
-      data: jsonNode.data,
-      values: { ...jsonNode.values },
+      data: structuredClone(jsonNode.data),
+      inputValues: { ...jsonNode.inputValues },
       id: jsonNode.id,
       breakpoint: jsonNode.breakpoint,
       style: jsonNode.style,
-      subgraphId: jsonNode.subgraphId,
+      targetGraphId: jsonNode.targetGraphId,
       loop: jsonNode.loop,
-      inputs: jsonNode.inputs.some(input => input.type) ? jsonNode.inputs.map(i => ({
-        ...i,
-        type: i.type as keyof typeof i.type,
-      })) : undefined,
-      outputs: jsonNode.outputs.some(output => output.type) ? jsonNode.outputs.map(o => ({
-        ...o,
-        type: o.type as OutputPort['type'],
+      inputs: jsonNode.inputs.some(input => input.type) ? jsonNode.inputs.map(input => {
+        const base = definition.inputs.find(port => port.name === input.name)
+        return {
+          ...(base && (!input.type || base.type === input.type) ? base : undefined),
+          ...input,
+          type: input.type ?? base?.type ?? '',
+        }
+      }) : undefined,
+      outputs: outputs.some(output => output.type) ? outputs.map(output => ({
+        ...output,
+        type: output.type ?? definition.outputs.find(port => port.name === output.name)?.type ?? '',
       })) : undefined,
     }) as NodeInstanceType
 
@@ -132,7 +153,7 @@ export function deserializeNodes(graph: Graph, jsonNodes: JsonNode[]): NodeInsta
     }
 
     if (!node.states.outputs) {
-      for (const jsonOutput of jsonNode.outputs) {
+      for (const jsonOutput of outputs) {
         const output = node.outputs.find((o) => o.name === jsonOutput.name)
         if (output) output.id = jsonOutput.id
       }

@@ -24,7 +24,7 @@ export function portEditorTemplate(
   values: Record<string, unknown>,
   handlers: PortEditorHandlers
 ): TemplateResult | typeof nothing {
-  switch (port.type) {
+  switch (port.editor ?? port.type) {
     case 'string':
       return html`
         <input

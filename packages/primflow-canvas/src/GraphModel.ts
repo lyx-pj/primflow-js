@@ -1,3 +1,4 @@
+import type { NodeRegistry } from '@lyx-pj/primflow-model'
 import type { Graph, LinkInstanceType } from './Graph'
 import type { Command } from './UndoManager'
 import {
@@ -6,7 +7,6 @@ import {
   ChangedEventType,
   VariableManager,
   DEFAULT_LOOP_CONFIG,
-  type VariableDef,
   type NodeInstanceType,
   type JsonGraph
 } from '@lyx-pj/primflow-model'
@@ -22,7 +22,13 @@ export class GraphModel {
   constructor(id: string = '', nodes: NodeInstanceType[] = [], links: LinkInstanceType[] = []) {
     this.id = id
     this.nodes = nodes
+    for (const node of nodes) node.graphId = id
     this.links = links
+  }
+
+  public addNodes(nodes: NodeInstanceType[]) {
+    for (const node of nodes) node.graphId = this.id
+    this.nodes.push(...nodes)
   }
 }
 
@@ -34,7 +40,7 @@ type BlueprintModelEventsPayload = {
 }
 export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
 
-  public variableManager = new VariableManager()
+  public readonly variableManager: VariableManager
   public activeGraph: GraphModel
   private graphStack: GraphModel[]
   private graph: Graph | null = null
@@ -42,8 +48,9 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
   public root: GraphModel = new GraphModel('root')
   public subgraphs: Map<string, GraphModel> = new Map() // key is subgraphId
 
-  constructor(root: GraphModel = new GraphModel(), subgraphs: Map<string, GraphModel> = new Map()) {
+  constructor(root: GraphModel = new GraphModel(), subgraphs: Map<string, GraphModel> = new Map(), dataTypes?: NodeRegistry['dataTypes']) {
     super()
+    this.variableManager = new VariableManager(dataTypes)
     this.subgraphs = subgraphs
     this.root = root
     this.activeGraph = root
@@ -74,10 +81,10 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
     this.graph = graph
     if (this.graph) {
       // Loop bodies use dedicated entries; serialization must not insert ordinary Start nodes.
-      const loopBodies = new Set(this.getAllNodes().filter(node => node.type === 'loop').map(node => node.subgraphId))
+      const loopBodies = new Set(this.getAllNodes().filter(node => node.kind === 'loop').map(node => node.targetGraphId))
       for (const model of [this.root, ...this.subgraphs.values()]) {
         if (loopBodies.has(model.id)) continue
-        if (!model.nodes.some(node => node.type === 'start')) {
+        if (!model.nodes.some(node => node.kind === 'start')) {
           let id = `start-${model.id || 'root'}`
           while (model.nodes.some(node => node.id === id)) id += '-start'
           const start = new NodeInstance(this.graph.nodeRegistry.getStartNodeClass(), {
@@ -86,7 +93,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
           })
           // Unmounted subgraphs may be saved immediately, so port IDs cannot depend on first render.
           for (const output of start.outputs) output.id ||= `out-${output.name}`
-          model.nodes.push(start)
+          model.addNodes([start])
         }
       }
       this.graph.on('viewport:change', this.onViewportChange)
@@ -178,7 +185,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
 
   /** Whether the current or specified region is a loop body. */
   public isLoopBody(graphId: string = this.activeGraph.id) {
-    return this.getAllNodes().some((node) => node.type === 'loop' && node.subgraphId === graphId)
+    return this.getAllNodes().some((node) => node.kind === 'loop' && node.targetGraphId === graphId)
   }
 
   public createSubgraph(subgraphId: string) {
@@ -205,8 +212,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
         ...endNode.inputs,
         { id: 'in-result', name: 'result', type: 'any', label: 'result' }
       ]
-      sub.nodes.push(startNode)
-      sub.nodes.push(endNode)
+      sub.addNodes([startNode, endNode])
       return sub
     }
   }
@@ -245,11 +251,11 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
     if (this.isSettingGraph) return
     if (nodes.length === 0) return
     if (!this.graph) return
-    this.activeGraph.nodes.push(...nodes)
+    this.activeGraph.addNodes(nodes)
     for (const node of nodes) {
-      if (node.definition.type === 'subgraph') {
+      if (node.kind === 'subgraph') {
         this.handleSubgraphNode(node)
-      } else if (node.definition.type === 'loop') {
+      } else if (node.kind === 'loop') {
         this.handleLoopNode(node)
       }
     }
@@ -269,8 +275,8 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
           doRemoveLinks.push(link)
         }
       })
-      if (node.subgraphId && this.hasSubgraph(node.subgraphId)) {
-        removeSubgraphIds.push(node.subgraphId)
+      if (node.targetGraphId && this.hasSubgraph(node.targetGraphId)) {
+        removeSubgraphIds.push(node.targetGraphId)
       }
     })
     if (removeSubgraphIds.length > 0) {
@@ -278,8 +284,8 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
       for (let index = 0; index < removeSubgraphIds.length; index += 1) {
         const nested = this.subgraphs.get(removeSubgraphIds[index])
         for (const child of nested?.nodes ?? []) {
-          if (child.subgraphId && this.hasSubgraph(child.subgraphId) && !removeSubgraphIds.includes(child.subgraphId)) {
-            removeSubgraphIds.push(child.subgraphId)
+          if (child.targetGraphId && this.hasSubgraph(child.targetGraphId) && !removeSubgraphIds.includes(child.targetGraphId)) {
+            removeSubgraphIds.push(child.targetGraphId)
           }
         }
       }
@@ -289,7 +295,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
         .flatMap((model) => model.nodes)
         .filter((node) => !nodes.includes(node))
       for (const node of survivingNodes) {
-        const index = node.subgraphId ? removeSubgraphIds.indexOf(node.subgraphId) : -1
+        const index = node.targetGraphId ? removeSubgraphIds.indexOf(node.targetGraphId) : -1
         if (index > -1) removeSubgraphIds.splice(index, 1)
       }
       removeSubgraphIds.forEach((id) => this.removeSubgraph(id))
@@ -355,12 +361,12 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
     json: JsonGraph | string,
     options: { keepStartPorts?: boolean } = {}
   ): BlueprintModel {
-    const model = new BlueprintModel()
+    const model = new BlueprintModel(undefined, undefined, graph.nodeRegistry.dataTypes)
     if (typeof json === 'string') {
       json = JSON.parse(json)
     }
     const { subgraphs, nodes, links, variables, viewport } = Util.fromJSON(graph as Graph, json, options)
-    model.root.nodes = nodes
+    model.root.addNodes(nodes)
     model.root.links = links
     model.root.viewport = { x: viewport.x, y: viewport.y, scale: viewport.zoom }
     for (const variable of variables) {
@@ -368,7 +374,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
         name: variable.name,
         type: variable.type,
         value: variable.value
-      } as VariableDef)
+      }, { preserveInvalid: true })
     }
     for (const subgraphId in subgraphs) {
       const subgraphData = subgraphs[subgraphId]
@@ -393,26 +399,26 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
   }
 
   private handleSubgraphNode(node: NodeInstanceType) {
-    // Nodes without subgraphId create embedded regions, including direct addNode('subgraph') calls.
-    // A subgraphId without a matching region identifies an external file reference.
+    // Nodes without targetGraphId create embedded regions, including direct addNode('subgraph') calls.
+    // A targetGraphId without a matching region identifies an external file reference.
     // The host stores and executes external content; canvas does not create empty regions for it.
-    if (!node.subgraphId) {
-      node.subgraphId = this.generateSubgraphId()
-      this.createSubgraph(node.subgraphId)
+    if (!node.targetGraphId) {
+      node.targetGraphId = this.generateSubgraphId()
+      this.createSubgraph(node.targetGraphId)
     }
   }
 
   private handleLoopNode(node: NodeInstanceType) {
-    node.subgraphId ||= this.generateSubgraphId()
+    node.targetGraphId ||= this.generateSubgraphId()
     node.loop ||= { ...DEFAULT_LOOP_CONFIG }
-    if (!this.hasSubgraph(node.subgraphId)) {
-      this.createLoopBody(node.subgraphId)
+    if (!this.hasSubgraph(node.targetGraphId)) {
+      this.createLoopBody(node.targetGraphId)
     }
   }
 
   /**
    * Loop bodies live in subgraphs but use dedicated entry and return controls.
-   * Entries have one data output; returns expose next and break execution inputs.
+   * Entries expose the initial and current values; returns have next and break execution inputs.
    */
   private createLoopBody(subgraphId: string) {
     if (!this.graph) return
@@ -429,7 +435,7 @@ export class BlueprintModel extends EventEmitter<BlueprintModelEventsPayload> {
       id: `loop-return-${subgraphId}`,
       position: { x: 600, y: 300 },
     })
-    sub.nodes.push(entry, loopReturn)
+    sub.addNodes([entry, loopReturn])
     // Connect entry to return initially to satisfy engine structure validation.
     // Replace this connection after adding business nodes.
     sub.links.push({

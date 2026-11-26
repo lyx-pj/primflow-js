@@ -1,5 +1,5 @@
 import { JointGraph } from './joint/JointGraph'
-import { type GraphOptions, Graph, type NodeInstanceType, type LinkInstanceType } from '../Graph'
+import { type GraphOptions, Graph, type NodeInstanceType, type LinkInstanceType, type LinkEnds } from '../Graph'
 import type { InputPort, OutputPort, NodeStyle, LinkStyle, NodeExecutionStatus } from '@lyx-pj/primflow-model'
 import { BlueprintNode } from './joint/nodes/BlueprintNode'
 import { dia, mvc } from '@joint/core'
@@ -34,6 +34,8 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
   public ui?: CanvasUI
   /** Hovered node id; clear on removal so delayed mouseout cannot access disposed instances. */
   private hoveredNodes = new Set<string>()
+  /** Temporary JointJS-only link shown while the add-and-connect palette is open. */
+  private pendingLinkId: string | null = null
 
   constructor(graph: Graph, options?: GraphOptions) {
     super()
@@ -109,7 +111,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       {
         name: `case_${caseNumber}_value`,
         type: 'string',
-        id: this.generatePortId(instance.inputs, 'in'),
+        id: this.generatePortId([...instance.inputs, ...instance.outputs]),
       },
     ]
     instance.outputs = [
@@ -117,7 +119,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       {
         name: `case_${caseNumber}`,
         type: 'exec',
-        id: this.generatePortId(instance.outputs, 'out'),
+        id: this.generatePortId([...instance.inputs, ...instance.outputs]),
       },
     ]
   }
@@ -160,6 +162,12 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     return jointCell instanceof dia.Element ? jointCell.size() : undefined
   }
 
+  /** Canvas node instance for a joint cell id. */
+  public getNodeInstance(id: string): NodeInstanceType | undefined {
+    const cell = this.cellsMap.get(id)?.cell
+    return cell && !(cell as LinkInstanceType).source ? cell as NodeInstanceType : undefined
+  }
+
   public select(item: NodeInstanceType | LinkInstanceType | string) {
     const id = typeof item === 'string' ? item : item.id || ''
     const cellObj = this.cellsMap.get(id)
@@ -173,6 +181,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       }
     }
     this.joint.groupCells([...this.jointSelection])
+    this.syncLinkEndpointTools()
   }
 
   public selectCollection(items: Array<NodeInstanceType | LinkInstanceType>) {
@@ -191,6 +200,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       }
     })
     this.joint.groupCells([...this.jointSelection])
+    this.syncLinkEndpointTools()
   }
 
   public unselect(item: NodeInstanceType | LinkInstanceType | string) {
@@ -206,22 +216,26 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       }
     }
     this.joint.groupCells([...this.jointSelection])
+    this.syncLinkEndpointTools()
   }
 
   public clearSelection() {
     this.selection.clear()
     this.jointSelection.clear()
     this.joint.clearGroups()
+    this.syncLinkEndpointTools()
   }
 
   public addNode(instance: NodeInstanceType, style?: NodeStyle) {
     instance.id = instance.id || this.generateNodeId()
-    for (const input of instance.inputs || []) {
-      input.id = this.generatePortId(instance.inputs, 'in', input.id)
+    const ports = [...instance.inputs, ...instance.outputs]
+    const usedIds = new Set<string>()
+    for (const port of ports) {
+      if (!port.id) continue
+      if (usedIds.has(port.id)) throw new Error(`Duplicate port ID "${port.id}" in node "${instance.id}".`)
+      usedIds.add(port.id)
     }
-    for (const output of instance.outputs || []) {
-      output.id = this.generatePortId(instance.outputs, 'out', output.id)
-    }
+    for (const port of ports) port.id ||= this.generatePortId(ports)
 
     const jointNode = this.joint.addNode(instance, style)
 
@@ -244,6 +258,98 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     link.id = link.id || this.generateLinkId()
     const jointLink = this.joint.addLink(link, style)
     this.cellsMap.set(link.id as string, { cell: link, jointCell: jointLink })
+    this.applyLinkColor(jointLink)
+  }
+
+  /** Apply a model endpoint change to the matching JointJS link. */
+  public updateLink(link: LinkInstanceType) {
+    const jointCell = this.cellsMap.get(link.id as string)?.jointCell
+    if (!(jointCell instanceof dia.Link)) return
+    jointCell.set({
+      source: { ...link.source },
+      target: { ...link.target },
+    })
+    this.applyLinkColor(jointCell)
+  }
+
+  /** Highlight ports used by `ends` and clear stale highlights. */
+  public syncPortHighlights(ends: LinkEnds) {
+    this.joint.syncPortHighlights(ends)
+  }
+
+  /** Keep a dangling draft link visible until the user chooses a node or cancels. */
+  public createPendingLink(
+    source: { id: string; port: string },
+    target: { x: number; y: number },
+    style?: LinkStyle
+  ) {
+    this.discardPendingLink()
+    const id = this.generateLinkId()
+    this.joint.addPendingLink(id, source, target, style)
+    this.pendingLinkId = id
+    return id
+  }
+
+  /** Remove the draft link and its model-free JointJS cell. */
+  public discardPendingLink(id: string | null = this.pendingLinkId) {
+    if (!id) return
+    this.joint.discardPendingLink(id)
+    if (this.pendingLinkId === id) this.pendingLinkId = null
+  }
+
+  /**
+   * Turn the draft link into a model link without recreating its JointJS cell.
+   *
+   * The caller owns the surrounding transaction; this method only raises the
+   * model insert that records the link in undo history.
+   */
+  public promotePendingLink(id: string, ends: LinkEnds): LinkInstanceType | null {
+    const jointLink = this.joint.releasePendingLink(id)
+    if (!jointLink) return null
+    if (this.pendingLinkId === id) this.pendingLinkId = null
+    try {
+      jointLink.set({
+        source: { ...ends.source },
+        target: { ...ends.target },
+      })
+      const linkInstance = this.graph.createLinkInstance({
+        id,
+        source: ends.source,
+        target: ends.target,
+      })
+      this.cellsMap.set(id, { cell: linkInstance, jointCell: jointLink })
+      this.applyLinkColor(jointLink)
+      linkInstance.style = mergeDeep(linkInstance.style ?? {}, {
+        strokeWidth: jointLink.attr('line/strokeWidth'),
+      }) as LinkStyle
+      this.graph.model.addLinks([linkInstance])
+      this.joint.syncPortHighlights(ends)
+      return linkInstance
+    } catch (error) {
+      this.cellsMap.delete(id)
+      this.joint.removeCells([jointLink])
+      throw error
+    }
+  }
+
+  /**
+   * Paint one link with the colour of the port it joins.
+   *
+   * A link carries no colour of its own, so loading a graph always matches the
+   * current port colours rather than a colour stored with the file.
+   */
+  private applyLinkColor(jointLink: dia.Link) {
+    const source = jointLink.source()
+    const target = jointLink.target()
+    const from = this.findNode(String(source.id))
+    const to = this.findNode(String(target.id))
+    const reversed = from?.inputs.some(port => port.id === source.port)
+    const sourceNode = reversed ? to : from
+    const targetNode = reversed ? from : to
+    const output = sourceNode?.outputs.find(port => port.id === (reversed ? target : source).port)
+    const input = targetNode?.inputs.find(port => port.id === (reversed ? source : target).port)
+    if (!sourceNode || !targetNode || !output || !input) return
+    jointLink.attr('line/stroke', this.graph.getLinkColor(sourceNode, targetNode, output, input))
   }
 
   public removeCells(nodes: Array<NodeInstanceType | LinkInstanceType>) {
@@ -267,6 +373,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     this.keyboardManager?.destroy()
     this.ui?.destroy()
     this.ui = undefined
+    this.discardPendingLink()
     this.joint.destroy()
     this.joint = null as unknown as JointGraph
   }
@@ -370,14 +477,10 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     })
   }
 
-  private generatePortId<T extends OutputPort | InputPort>(list: readonly T[], prefix: string, defaultId: string = ''): string {
-    if (defaultId) {
-      if (!defaultId.startsWith(prefix + '-')) defaultId = prefix + '-' + defaultId
-      return defaultId
-    }
-    const id = `${prefix}-${Math.random().toString(36).slice(2, 11)}`
+  private generatePortId(list: readonly (OutputPort | InputPort)[]): string {
+    const id = `port-${Math.random().toString(36).slice(2, 11)}`
     if (list.some(port => port.id === id)) {
-      return this.generatePortId(list, prefix)
+      return this.generatePortId(list)
     }
     return id
   }
@@ -404,8 +507,9 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
       this.joint.graph.set('language', language)
       this.ui?.refreshLanguage()
     }
-    if (options.toolbar !== undefined || options.debugPanel !== undefined || options.navigation !== undefined) this.ui?.refreshToolbar()
+    if (options.toolbar !== undefined || options.debugPanel !== undefined || options.nodePanel !== undefined || options.navigation !== undefined) this.ui?.refreshToolbar()
     if (options.debugPanel !== undefined) this.ui?.refreshDebugPanel()
+    if (options.nodePanel !== undefined) this.ui?.refreshNodePanel()
     if (options.width) this.joint.paper.options.width = options.width
     if (options.height) this.joint.paper.options.height = options.height
     if (options.gridSize !== undefined) this.joint.paper.options.gridSize = options.gridSize
@@ -422,17 +526,17 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
   private initGraphEvents() {
     this.graph.on('node:mounted', (node) => {
       node.inputs.forEach(async input => {
-        if (input.type !== 'select') return
+        if (input.editor !== 'select') return
         const jointCell = this.cellsMap.get(node.id || '')?.jointCell
         if (!jointCell) return
         const elementView = this.joint.paper.findViewByModel(jointCell) as BlueprintNodeView
         if (typeof input.options === 'function') {
-          const options = await input.options(node.values)
+          const options = await input.options(node.inputValues)
           if (options === input._options || !Array.isArray(options)) return
           input._options = options
           jointCell.get('inputs').find((i: InputPort) => i.name === input.name)._options = input._options
           elementView.updateOptions(input.id || '', input.name, input._options || [])
-          if (!node.values[input.name]) node.values[input.name] = input._options?.[0]?.value
+          if (!node.inputValues[input.name]) node.inputValues[input.name] = input._options?.[0]?.value
           elementView.refreshDomValue(input.name)
         }
       })
@@ -462,24 +566,24 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
             ) as NodeStyle
           )
           break
-        case 'values':
-          (jointCell as BlueprintNode).setValues(node.values);
+        case 'inputValues':
+          (jointCell as BlueprintNode).setValues(node.inputValues);
           {
             const elementView = this.joint.paper.findViewByModel(jointCell) as BlueprintNodeView
             for (const name of Object.keys(newvalue || {})) {
               elementView.refreshDomValue(name)
               node.inputs.forEach(async input => {
-                if (input.type !== 'select') return
+                if (input.editor !== 'select') return
                 if (input.name === name) {
                   return
                 }
                 if (typeof input.options === 'function') {
-                  const options = await input.options(node.values)
+                  const options = await input.options(node.inputValues)
                   if (options === input._options || !Array.isArray(options)) return
                   input._options = options
                   jointCell.get('inputs').find((i: InputPort) => i.name === input.name)._options = input._options
                   elementView.updateOptions(input.id || '', input.name, input._options || [])
-                  node.values = { [input.name]: input._options?.[0]?.value }
+                  node.inputValues = { [input.name]: input._options?.[0]?.value }
                 }
               })
             }
@@ -504,7 +608,7 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
 
     listener.listenTo(this.joint.graph, 'node:values:changed', (elementView, name, value) => {
       const instance = this.cellsMap.get(elementView.model.id as string)?.cell as NodeInstanceType
-      instance.values = { [name]: value }
+      instance.inputValues = { [name]: value }
     })
 
     // Element click
@@ -590,42 +694,54 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
 
     // Link connected
     listener.listenTo(this.joint.paper, 'link:connect', (linkView) => {
-      const source = linkView.model.get('source')
-      const target = linkView.model.get('target')
+      const jointLink = linkView.model as dia.Link
+      const source = jointLink.source()
+      const target = jointLink.target()
+      const from = this.findNode(String(source.id))
+      const to = this.findNode(String(target.id))
+      const reversed = from?.inputs.some(port => port.id === source.port)
+      const sourceNode = reversed ? to : from
+      const targetNode = reversed ? from : to
+      const outputEnd = reversed ? target : source
+      const inputEnd = reversed ? source : target
+      const output = sourceNode?.outputs.find(port => port.id === outputEnd.port)
+      const input = targetNode?.inputs.find(port => port.id === inputEnd.port)
+      if (!sourceNode || !targetNode || !output || !input) return
+      if (reversed) jointLink.set({ source: outputEnd, target: inputEnd })
+
+      const ends: LinkEnds = {
+        source: { id: sourceNode.id, port: output.id! },
+        target: { id: targetNode.id, port: input.id! },
+      }
+      const existing = this.findLink(jointLink.id as string)
+      if (existing) {
+        const before: LinkEnds = {
+          source: { ...existing.source },
+          target: { ...existing.target },
+        }
+        if (
+          before.source.id === ends.source.id && before.source.port === ends.source.port &&
+          before.target.id === ends.target.id && before.target.port === ends.target.port
+        ) {
+          return
+        }
+        this.graph.startTransaction()
+        this.graph.undoManager.recordLinkEnds(existing, before, ends)
+        this.graph.applyLinkEnds(existing, ends)
+        this.graph.commitTransaction()
+        return
+      }
+
       const linkInstance = this.graph.createLinkInstance({
-        id: linkView.model.id,
-        source: { id: source.id as string, port: source.port as string },
-        target: { id: target.id as string, port: target.port as string }
+        id: jointLink.id as string,
+        source: ends.source,
+        target: ends.target,
       })
-      this.cellsMap.set(linkInstance.id as string, { cell: linkInstance, jointCell: linkView.model as dia.Link })
+      this.cellsMap.set(linkInstance.id as string, { cell: linkInstance, jointCell: jointLink })
 
-      const sourceObj = this.cellsMap.get(source.id as string)
-      const targetObj = this.cellsMap.get(target.id as string)
-
-      const sourceJointNode = sourceObj?.jointCell as BlueprintNode
-      const targetJointNode = targetObj?.jointCell as BlueprintNode
-      if (!sourceJointNode || !targetJointNode) return
-
-      const sourceNode = sourceObj?.cell as NodeInstanceType
-      const targetNode = targetObj?.cell as NodeInstanceType
-      const sourcePortId = source.port as string
-      const targetPortId = target.port as string
-      const sourcePort = sourcePortId.startsWith('in-') ?
-        sourceNode.inputs?.find(port => port.id === sourcePortId) :
-        sourceNode.outputs?.find(port => port.id === sourcePortId)
-      const targetPort = targetPortId.startsWith('out-') ?
-        targetNode.outputs?.find(port => port.id === targetPortId) :
-        targetNode.inputs?.find(port => port.id === targetPortId)
-
-      linkView.model.attr('line/stroke', this.graph.getLinkColor(
-        sourceNode as NodeInstanceType,
-        targetNode as NodeInstanceType,
-        sourcePort as OutputPort,
-        targetPort as OutputPort
-      ))
-
+      // The colour is derived from the ports, so it is not stored on the link.
+      this.applyLinkColor(jointLink)
       linkInstance.style = mergeDeep(linkInstance.style ?? {}, {
-        stroke: linkView.model.attr('line/stroke'),
         strokeWidth: linkView.model.attr('line/strokeWidth')
       }) as LinkStyle
 
@@ -719,6 +835,21 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
   selectionChanged() {
     this.graph.emit('selection:changed', Array.from(this.selection))
     this.joint.groupCells(Array.from(this.jointSelection))
+    this.syncLinkEndpointTools()
+  }
+
+  /** Refresh handles after replay toggles or selection changes outside the adapter. */
+  public refreshLinkEndpointTools() {
+    this.syncLinkEndpointTools()
+  }
+
+  /** Endpoint handles are only available for a single selected link. */
+  private syncLinkEndpointTools() {
+    const selected = Array.from(this.selection)
+    const link = selected.length === 1 && selected[0] instanceof Graph.LinkInstance
+      ? selected[0] as LinkInstanceType
+      : null
+    this.joint.showLinkEndpointTools(link)
   }
 
   clear() {
@@ -726,6 +857,8 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     this.selection.clear()
     this.jointSelection.clear()
     this.hoveredNodes.clear()
+    this.discardPendingLink()
     this.joint.clear()
+    this.joint.showLinkEndpointTools(null)
   }
 }

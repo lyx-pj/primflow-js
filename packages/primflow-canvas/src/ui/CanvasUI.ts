@@ -1,5 +1,5 @@
 import type { dia } from '@joint/core'
-import type { Graph, LinkInstanceType, NodeInstanceType } from '../Graph'
+import type { Graph, LinkEnds, LinkInstanceType, NodeInstanceType } from '../Graph'
 import type { GraphAdapter } from '../adapters/GraphAdapter'
 import { OverlayLayer } from './OverlayLayer'
 import { Palette } from './components/Palette'
@@ -12,6 +12,9 @@ import { ZoomControls } from './components/ZoomControls'
 import { Minimap } from './components/Minimap'
 import { ExecutionEffects } from './components/ExecutionEffects'
 import { NodeExecutionPreview } from './components/NodeExecutionPreview'
+import { PortTooltip } from './components/PortTooltip'
+import { resolveSourcePort, type ConnectionSource } from './connectionTargets'
+import { COMPACT_UI_WIDTH, UI_GAP } from './layout'
 import type {
   CanvasGraph,
   ContextMenuOptions,
@@ -21,27 +24,19 @@ import type {
   ToolbarOptions,
 } from './types'
 
-const NODE_CONTROL_SELECTOR = [
-  'input',
-  'textarea',
-  'select',
-  'button',
-  'a[href]',
-  '[contenteditable]:not([contenteditable="false"])',
-  '[role="button"]',
-  '[role="checkbox"]',
-  '[role="combobox"]',
-  '[role="textbox"]',
-  '[port]',
-  '[data-port-field]',
-].join(',')
-
 /** Double-click window covering adjustable system double-click speeds. */
 const DOUBLE_CLICK_WINDOW_MS = 800
-/** Delay first container panel opening briefly to avoid flicker on subgraph double-click. */
-const CONTAINER_PANEL_DELAY_MS = 200
 /** Wait for a second right click inside subgraphs before showing context menus. */
 const BLANK_MENU_DELAY_MS = 300
+/** Ignore endpoint/port presses that did not become a drag. */
+const LINK_DROP_MIN_DISTANCE = 5
+
+interface LinkDragState {
+  client: { x: number; y: number }
+  endpoint?: 'source' | 'target'
+  linkId?: string
+  before?: LinkEnds
+}
 
 /**
  * Canvas UI orchestration.
@@ -63,17 +58,14 @@ export class CanvasUI {
   private readonly debugPanel: DebugPanel
   private readonly replayBanner: ReplayBanner
   private replayActive = false
+  private compact = false
+  private resizeObserver: ResizeObserver | null = null
   private previousInteractive: dia.Paper.Options['interactive'] = true
   private readonly palette: Palette
   private readonly contextMenu: ContextMenu
   private readonly executionEffects: ExecutionEffects
   private readonly executionPreview: NodeExecutionPreview
-  private autoOpenPanel: boolean
-  /** Pending node panel, delayed only for initial container opening. */
-  private pendingPanelNode: NodeInstanceType | null = null
-  private pendingPanelTimer: ReturnType<typeof setTimeout> | null = null
-  /** Last clicked container, checked after selection notification to decide whether to delay. */
-  private clickedContainerNode: NodeInstanceType | null = null
+  private readonly portTooltip: PortTooltip
   private lastBlankRightClick = 0
   /** Latest blank right-button pointerdown, allowing double-click detection despite delayed contextmenu. */
   private lastRightPointerDown = 0
@@ -82,28 +74,45 @@ export class CanvasUI {
   private blankMenuActive = false
   /** Suppress late contextmenu events briefly after right-button double-click navigation. */
   private suppressContextMenuUntil = 0
+  /** Active link/port drag, including endpoint-handle drags on selected links. */
+  private linkDrag: LinkDragState | null = null
 
   constructor(graph: Graph, adapter: GraphAdapter, paper: dia.Paper) {
     this.graph = graph as unknown as CanvasGraph
-    this.autoOpenPanel = adapter.selection.size === 0
     this.adapter = adapter
     this.paper = paper
     this.overlay = new OverlayLayer(paper.el as HTMLElement)
     this.replayBanner = new ReplayBanner(this.overlay, () => this.graph.exitReplay(), () => this.graph.options.language)
     this.executionEffects = new ExecutionEffects(this.overlay)
     this.executionPreview = new NodeExecutionPreview(this.graph, this.overlay)
+    this.portTooltip = new PortTooltip(this.overlay)
     this.refreshExecutionStatus()
-    // Create the debug panel before the toolbar so initial visibility is correct.
+    // Create the panels before the toolbar so initial visibility and pressed states match.
     this.debugPanel = new DebugPanel(this.graph, this.overlay, () => this.debugPanelOptions, this.onDebugPanelVisibility)
+    this.panel = new NodePanel(
+      this.graph,
+      this.overlay,
+      () => this.nodePanelOptions,
+      this.onNodePanelVisibility,
+      this.locateNode
+    )
+    this.syncNodePanelSelection()
     this.toolbar = new Toolbar(this.graph, this.overlay, () => this.toolbarOptions, {
-      available: () => this.debugPanelOptions !== null,
-      open: () => this.debugPanel.isOpen(),
-      toggle: () => this.debugPanel.toggle(),
+      node: {
+        available: () => this.nodePanelOptions !== null,
+        open: () => this.panel.isOpen(),
+        toggle: () => this.toggleNodePanel(),
+      },
+      debug: {
+        available: () => this.debugPanelOptions !== null,
+        open: () => this.debugPanel.isOpen(),
+        toggle: () => this.toggleDebugPanel(),
+      },
     })
     this.zoomControls = new ZoomControls(this.graph, paper, this.overlay)
     this.minimap = new Minimap(this.graph, paper, this.overlay)
-    this.panel = new NodePanel(this.graph, this.overlay, () => this.nodePanelOptions)
-    this.syncPanelLayout()
+    this.syncLayout()
+    this.observeLayout()
     this.palette = new Palette(this.graph, adapter, this.overlay, () => this.paletteOptions)
     this.contextMenu = new ContextMenu(this.graph, this.overlay, () => this.contextMenuOptions, (x, y) =>
       this.openPalette(x, y)
@@ -120,6 +129,9 @@ export class CanvasUI {
       this.debugPanel, this.replayBanner, this.palette, this.contextMenu, this.executionPreview]) {
       component.refreshLanguage()
     }
+    // Port labels come from the application, so a language refresh may rebuild
+    // the ports under the pointer; drop the card instead of showing stale text.
+    this.portTooltip.hide()
   }
 
   refreshToolbar() {
@@ -130,10 +142,12 @@ export class CanvasUI {
     const status = this.graph.executionStatus ?? 'idle'
     this.paper.el.setAttribute('data-execution-status', status)
     this.executionEffects.refresh(status)
+    this.executionPreview.refresh()
   }
 
   refreshNodeExecutionPreview(nodeId: string) {
     this.executionPreview.refresh(nodeId)
+    this.panel.refreshExecution(nodeId)
   }
 
   isDebugPanelOpen() {
@@ -141,6 +155,7 @@ export class CanvasUI {
   }
 
   openDebugPanel() {
+    if (this.compact && this.panel.isOpen()) this.panel.close()
     this.debugPanel.open()
   }
 
@@ -149,11 +164,38 @@ export class CanvasUI {
   }
 
   toggleDebugPanel() {
+    if (!this.debugPanel.isOpen() && this.compact && this.panel.isOpen()) this.panel.close()
     this.debugPanel.toggle()
   }
 
   refreshDebugPanel() {
     this.debugPanel.refresh()
+    this.syncPanelLayout()
+  }
+
+  isNodePanelOpen() {
+    return this.panel.isOpen()
+  }
+
+  openNodePanel() {
+    // Replay data is read-only; do not expose editable node settings there.
+    if (this.graph.isReplayMode()) return
+    if (this.compact && this.debugPanel.isOpen()) this.debugPanel.close()
+    this.panel.open()
+  }
+
+  closeNodePanel() {
+    this.panel.close()
+  }
+
+  toggleNodePanel() {
+    if (this.graph.isReplayMode()) return
+    if (!this.panel.isOpen() && this.compact && this.debugPanel.isOpen()) this.debugPanel.close()
+    this.panel.toggle()
+  }
+
+  refreshNodePanel() {
+    this.panel.refresh()
     this.syncPanelLayout()
   }
 
@@ -170,16 +212,20 @@ export class CanvasUI {
     this.palette.close()
     this.contextMenu.close()
     this.executionPreview.close()
+    this.portTooltip.hide()
   }
 
   destroy() {
     this.cancelBlankMenu()
-    this.cancelPendingPanel()
     this.lastBlankRightClick = 0
     this.lastRightPointerDown = 0
     this.blankMenuActive = false
     this.suppressContextMenuUntil = 0
+    this.linkDrag = null
     this.unbind()
+    this.resizeObserver?.disconnect()
+    this.resizeObserver = null
+    ;(this.paper.el as HTMLElement).removeAttribute('data-bpgraph-compact')
     if (this.replayActive) this.paper.options.interactive = this.previousInteractive
     this.replayBanner.destroy()
     this.toolbar.destroy()
@@ -191,6 +237,7 @@ export class CanvasUI {
     this.contextMenu.destroy()
     this.executionEffects.destroy()
     this.executionPreview.destroy()
+    this.portTooltip.destroy()
     this.paper.el.removeAttribute('data-execution-status')
     this.overlay.dispose()
   }
@@ -202,18 +249,20 @@ export class CanvasUI {
     this.paper.on('blank:contextmenu', this.onBlankContextMenu)
     this.paper.on('element:contextmenu', this.onElementContextMenu)
     this.paper.on('link:contextmenu', this.onLinkContextMenu)
+    this.paper.on('link:pointerdown', this.onLinkPointerDown)
+    this.paper.on('link:pointerup', this.onLinkPointerUp)
     ;(this.paper.el as HTMLElement).addEventListener('pointerdown', this.onPointerDown, true)
     ;(this.paper.el as HTMLElement).addEventListener('contextmenu', this.onContextMenu, true)
+    ;(this.paper.el as HTMLElement).addEventListener('mouseover', this.onPortEnter)
+    ;(this.paper.el as HTMLElement).addEventListener('mouseout', this.onPortLeave)
     document.addEventListener('keydown', this.onKeyDown)
     this.graph.on('viewport:change', this.onViewportChange)
     this.graph.on('selection:changed', this.onSelectionChanged)
-    this.graph.on('node:click', this.onNodeClick)
-    this.graph.on('node:dblclick', this.onNodeDoubleClick)
     this.graph.on('node:mouseenter', this.onNodeEnter)
     this.graph.on('node:mouseleave', this.onNodeLeave)
-    this.graph.on('node:removed', this.executionPreview.close)
+    this.graph.on('node:removed', this.onNodeRemoved)
     this.graph.on('subgraph:enter', this.onSubgraphEnter)
-    this.graph.on('subgraph:exit', this.executionPreview.close)
+    this.graph.on('subgraph:exit', this.onSubgraphExit)
     this.graph.on('replay:changed', this.onReplayChanged)
   }
 
@@ -222,18 +271,20 @@ export class CanvasUI {
     this.paper.off('blank:contextmenu', this.onBlankContextMenu)
     this.paper.off('element:contextmenu', this.onElementContextMenu)
     this.paper.off('link:contextmenu', this.onLinkContextMenu)
+    this.paper.off('link:pointerdown', this.onLinkPointerDown)
+    this.paper.off('link:pointerup', this.onLinkPointerUp)
     ;(this.paper.el as HTMLElement).removeEventListener('pointerdown', this.onPointerDown, true)
     ;(this.paper.el as HTMLElement).removeEventListener('contextmenu', this.onContextMenu, true)
+    ;(this.paper.el as HTMLElement).removeEventListener('mouseover', this.onPortEnter)
+    ;(this.paper.el as HTMLElement).removeEventListener('mouseout', this.onPortLeave)
     document.removeEventListener('keydown', this.onKeyDown)
     this.graph.off('viewport:change', this.onViewportChange)
     this.graph.off('selection:changed', this.onSelectionChanged)
-    this.graph.off('node:click', this.onNodeClick)
-    this.graph.off('node:dblclick', this.onNodeDoubleClick)
     this.graph.off('node:mouseenter', this.onNodeEnter)
     this.graph.off('node:mouseleave', this.onNodeLeave)
-    this.graph.off('node:removed', this.executionPreview.close)
+    this.graph.off('node:removed', this.onNodeRemoved)
     this.graph.off('subgraph:enter', this.onSubgraphEnter)
-    this.graph.off('subgraph:exit', this.executionPreview.close)
+    this.graph.off('subgraph:exit', this.onSubgraphExit)
     this.graph.off('replay:changed', this.onReplayChanged)
   }
 
@@ -247,6 +298,121 @@ export class CanvasUI {
     if (this.palette.isOpen() || this.contextMenu.isOpen()) return
     const client = this.clientPoint(evt, x, y)
     this.openPalette(client.x, client.y)
+  }
+
+  private onLinkPointerDown = (linkView: dia.LinkView, evt: dia.Event, x: number, y: number) => {
+    const target = evt.target as Element | null
+    const endpoint: LinkDragState['endpoint'] = target?.closest?.('.target-arrowhead')
+      ? 'target'
+      : target?.closest?.('.source-arrowhead')
+        ? 'source'
+        : undefined
+    const link = this.graph.findLink(String(linkView.model.id))
+    this.linkDrag = {
+      client: this.clientPoint(evt, x, y),
+      endpoint,
+      linkId: link?.id,
+      before: link
+        ? { source: { ...link.source }, target: { ...link.target } }
+        : undefined,
+    }
+  }
+
+  private onLinkPointerUp = (linkView: dia.LinkView, evt: dia.Event, x: number, y: number) => {
+    const drag = this.linkDrag
+    this.linkDrag = null
+    if (!drag || this.graph.isReplayMode()) return
+    const client = this.clientPoint(evt, x, y)
+    if (Math.hypot(client.x - drag.client.x, client.y - drag.client.y) < LINK_DROP_MIN_DISTANCE) return
+
+    if (drag.endpoint) {
+      this.openReplacementPalette(linkView, evt, drag, client)
+      return
+    }
+
+    // A linked cell means the drag connected or touched an existing link.
+    if (this.paper.model.getCell(linkView.model.id)) return
+    const source = linkView.model.get('source') as { id?: string; port?: string } | undefined
+    if (!source?.id || !source.port) return
+    const node = this.graph.findNode(String(source.id))
+    const resolved = node ? resolveSourcePort(node, String(source.port)) : null
+    if (!node || !resolved) return
+    if (!this.paletteOptions || this.paletteOptions.connectOnDrop === false) return
+    const target = linkView.model.get('target') as { id?: string; x?: number; y?: number } | undefined
+    if (target?.id) return
+    const point =
+      typeof target?.x === 'number' && typeof target?.y === 'number'
+        ? { x: target.x, y: target.y }
+        : this.paper.clientToLocalPoint(client.x, client.y)
+    const stroke = linkView.model.attr('line/stroke')
+    const strokeWidth = linkView.model.attr('line/strokeWidth')
+    const pendingLinkId = this.adapter.createPendingLink(
+      { id: String(source.id), port: String(source.port) },
+      point,
+      {
+        ...(typeof stroke === 'string' ? { stroke } : {}),
+        ...(typeof strokeWidth === 'number' ? { strokeWidth } : {}),
+      }
+    )
+    this.openConnectionPalette(
+      { node, port: resolved.port, direction: resolved.direction },
+      undefined,
+      client,
+      pendingLinkId
+    )
+  }
+
+  /** Re-route an existing link: drop the endpoint on blank space to choose a new node. */
+  private openReplacementPalette(
+    linkView: dia.LinkView,
+    evt: dia.Event,
+    drag: LinkDragState,
+    client: { x: number; y: number }
+  ) {
+    const link = drag.linkId ? this.graph.findLink(drag.linkId) : undefined
+    if (!link) return
+    // `magnetUnderPointer` is set only when the drop passed validateConnection.
+    const data = linkView.eventData(evt) as { magnetUnderPointer?: Element | null } | undefined
+    if (data?.magnetUnderPointer) return
+    if (
+      drag.before &&
+      (drag.before.source.id !== link.source.id || drag.before.source.port !== link.source.port ||
+        drag.before.target.id !== link.target.id || drag.before.target.port !== link.target.port)
+    ) {
+      return
+    }
+    const remaining = drag.endpoint === 'target' ? link.source : link.target
+    const node = this.graph.findNode(remaining.id)
+    const resolved = node ? resolveSourcePort(node, remaining.port) : null
+    if (!node || !resolved) return
+    if (!this.paletteOptions || this.paletteOptions.connectOnDrop === false) return
+    this.openConnectionPalette(
+      { node, port: resolved.port, direction: resolved.direction },
+      link,
+      client
+    )
+  }
+
+  private openConnectionPalette(
+    source: ConnectionSource,
+    replaceLink: LinkInstanceType | undefined,
+    client: { x: number; y: number },
+    pendingLinkId?: string
+  ) {
+    this.cancelBlankMenu()
+    this.lastBlankRightClick = 0
+    this.lastRightPointerDown = 0
+    this.blankMenuActive = false
+    this.contextMenu.close()
+    this.executionPreview.close()
+    this.portTooltip.hide()
+    this.palette.openForConnection({
+      source,
+      replaceLink,
+      pendingLinkId,
+      clientX: client.x,
+      clientY: client.y,
+    })
   }
 
   private onBlankContextMenu = (evt: dia.Event, x: number, y: number) => {
@@ -331,6 +497,9 @@ export class CanvasUI {
   }
 
   private onPointerDown = (evt: PointerEvent) => {
+    this.portTooltip.hide()
+    // The connection palette is modal; outside presses must not close or edit the canvas.
+    if (this.palette.isConnectionMode()) return
     if (evt.button === 2 && this.graph.canGoBack()) {
       const target = evt.target as Element | null
       const overCell = Boolean(target?.closest?.('.joint-element, .joint-link'))
@@ -387,33 +556,22 @@ export class CanvasUI {
     }
   }
 
-  private onNodeClick = (node: NodeInstanceType, evt: MouseEvent) => {
-    const target = evt.target
-    // node:click precedes selection notifications; control clicks may select without opening panels.
-    if (evt.button !== 0 || (target instanceof Element && target.closest(NODE_CONTROL_SELECTOR))) {
-      this.autoOpenPanel = false
-      this.clickedContainerNode = null
-      // Control interactions also cancel any pending panel opening.
-      this.cancelPendingPanel()
-      return
-    }
-    // Only initial container panel opening waits to avoid flicker when double-clicking subgraphs.
-    // An already open panel updates immediately when selection changes.
-    this.clickedContainerNode = this.isContainerNode(node) ? node : null
-  }
-
-  private onNodeDoubleClick = (node: NodeInstanceType) => {
-    if (!this.isContainerNode(node)) return
-    // External subgraphs open asynchronously; do not rely on selection clearing or subgraph:enter to close panels.
-    this.clickedContainerNode = null
-    this.cancelPendingPanel()
-    this.panel.setNode(null)
-  }
-
   private onViewportChange = () => this.close()
 
+  private onPortEnter = (evt: MouseEvent) => {
+    this.portTooltip.enter(evt.target as Element | null)
+  }
+
+  private onPortLeave = (evt: MouseEvent) => {
+    this.portTooltip.leave(evt.target as Element | null, evt.relatedTarget as Element | null)
+  }
+
+  private onNodeRemoved = () => {
+    this.executionPreview.close()
+    this.portTooltip.hide()
+  }
+
   private onNodeEnter = (node: NodeInstanceType | undefined) => {
-    // Show node data only in hover cards, without changing debug panel content.
     if (!node) return
     const view = this.paper.findViewByModel(node.id)
     if (view) this.executionPreview.open(node, view.el)
@@ -424,10 +582,20 @@ export class CanvasUI {
     this.executionPreview.leave(node)
   }
 
-  /** Entering a subgraph replaces canvas content, so cancel pending panels. */
+  /** Entering a subgraph replaces canvas content, so the previous selection no longer applies. */
   private onSubgraphEnter = () => {
-    this.cancelPendingPanel()
+    this.palette.close()
+    this.panel.setNode(null)
     this.executionPreview.close()
+    this.portTooltip.hide()
+  }
+
+  /** Leaving a subgraph restores another graph, so clear the previous node until selection changes. */
+  private onSubgraphExit = () => {
+    this.palette.close()
+    this.panel.setNode(null)
+    this.executionPreview.close()
+    this.portTooltip.hide()
   }
 
   private onKeyDown = (evt: KeyboardEvent) => {
@@ -461,66 +629,44 @@ export class CanvasUI {
 
   private onSelectionChanged = (selection: Array<NodeInstanceType | LinkInstanceType>) => {
     if (this.graph.isReplayMode()) {
-      this.cancelPendingPanel()
       this.panel.setNode(null)
       return
     }
-    // Treat pending panels as open so selecting another node does not cancel its new opening.
-    const panelOpen = this.panel.isOpen()
-    const showPanel = panelOpen || this.autoOpenPanel || this.pendingPanelNode !== null
-    // Preserve panel visibility intent while selected; clearing selection permits automatic opening again.
-    this.autoOpenPanel = selection.length === 0
-    if (!this.nodePanelOptions || !showPanel) {
-      this.cancelPendingPanel()
-      this.panel.setNode(null)
-      return
-    }
+    this.syncNodePanelSelection(selection)
+  }
+
+  /** Show a single selected node; any other selection falls back to the overview. */
+  private syncNodePanelSelection(selection: Array<NodeInstanceType | LinkInstanceType> = Array.from(this.adapter.selection)) {
     const nodes = selection.filter((item): item is NodeInstanceType => {
       return this.adapter.findNode(item.id ?? '') === item
     })
-    const node = nodes.length === 1 ? nodes[0] : null
-    const clicked = this.clickedContainerNode
-    this.clickedContainerNode = null
-    if (node && clicked && clicked.id === node.id && !panelOpen) {
-      // Delay initial container panel opening briefly to avoid flashing before subgraph entry.
-      // Open panels bypass the delay and render newly selected nodes immediately.
-      this.schedulePendingPanel(node)
-      return
+    this.panel.setNode(nodes.length === 1 ? nodes[0] : null)
+  }
+
+  /** Select one overview node and center the viewport on it. */
+  private locateNode = (node: NodeInstanceType) => {
+    if (this.graph.selection.size !== 1 || !this.graph.selection.has(node)) {
+      this.adapter.clearSelection()
+      this.adapter.select(node)
+      this.adapter.selectionChanged()
     }
-    this.cancelPendingPanel()
-    this.panel.setNode(node)
+    this.centerViewportOnNode(node)
   }
 
-  /** Containers include embedded subgraphs and external references opened by the host. */
-  private isContainerNode(node: NodeInstanceType) {
-    return Boolean(node.subgraphId && (node.type === 'subgraph' || this.graph.model.hasSubgraph(node.subgraphId)))
-  }
-
-  /** Delay container panel opening; subgraph double-click cancels it first. */
-  private schedulePendingPanel(node: NodeInstanceType) {
-    this.cancelPendingPanel()
-    this.pendingPanelNode = node
-    this.pendingPanelTimer = setTimeout(() => {
-      this.pendingPanelTimer = null
-      this.pendingPanelNode = null
-      // Do not open if selection or subgraph changed while waiting.
-      if (!this.adapter.selection.has(node)) return
-      this.panel.setNode(node)
-    }, CONTAINER_PANEL_DELAY_MS)
-  }
-
-  /** Cancel pending panel opening. */
-  private cancelPendingPanel() {
-    if (this.pendingPanelTimer !== null) {
-      clearTimeout(this.pendingPanelTimer)
-      this.pendingPanelTimer = null
+  private centerViewportOnNode(node: NodeInstanceType) {
+    const size = this.adapter.getNodeSize(node.id)
+    const rect = (this.paper.el as HTMLElement).getBoundingClientRect()
+    if (!size || rect.width === 0 || rect.height === 0) return
+    const scale = this.graph.scale
+    this.graph.position = {
+      x: rect.width / 2 - (node.position.x + size.width / 2) * scale,
+      y: rect.height / 2 - (node.position.y + size.height / 2) * scale,
     }
-    this.pendingPanelNode = null
+    this.graph.emit('viewport:change', { ...this.graph.position, scale })
   }
 
   /** Select an unselected element before opening its menu so delete/copy target it. */
   private prepareSelection(item: NodeInstanceType | LinkInstanceType) {
-    this.autoOpenPanel = false
     if (this.graph.selection.has(item)) return
     this.adapter.clearSelection()
     this.adapter.select(item)
@@ -540,12 +686,14 @@ export class CanvasUI {
     }
     this.replayActive = replaying
     if (replaying) {
+      this.linkDrag = null
       this.previousInteractive = this.paper.options.interactive ?? true
       // Replay is read-only: disable node dragging and linking, retaining pan, zoom, and hover.
       this.paper.options.interactive = false
       this.paper.el.setAttribute('data-replay', 'true')
       this.close()
-      this.cancelPendingPanel()
+      // The node panel exposes editable settings, which replay data does not allow.
+      this.panel.close()
       this.panel.setNode(null)
       this.replayBanner.show(label)
     } else {
@@ -553,6 +701,7 @@ export class CanvasUI {
       this.paper.el.removeAttribute('data-replay')
       this.replayBanner.hide()
     }
+    this.adapter.refreshLinkEndpointTools()
     this.toolbar.refresh()
   }
 
@@ -563,9 +712,60 @@ export class CanvasUI {
     this.toolbar.refresh()
   }
 
-  /** Shift node panels left when the debug panel occupies the right side. */
+  private onNodePanelVisibility = () => {
+    this.syncPanelLayout()
+    this.toolbar.refresh()
+  }
+
+  private observeLayout() {
+    if (typeof ResizeObserver !== 'function') return
+    this.resizeObserver = new ResizeObserver(() => this.syncLayout())
+    this.resizeObserver.observe(this.paper.el as HTMLElement)
+  }
+
+  private syncLayout() {
+    const container = this.paper.el as HTMLElement
+    const width = container.clientWidth || container.getBoundingClientRect().width
+    const compact = width > 0 && width < COMPACT_UI_WIDTH
+    if (compact !== this.compact) this.setCompact(compact)
+    this.syncPanelLayout()
+  }
+
+  private setCompact(compact: boolean) {
+    this.compact = compact
+    const container = this.paper.el as HTMLElement
+    if (compact) container.setAttribute('data-bpgraph-compact', 'true')
+    else container.removeAttribute('data-bpgraph-compact')
+    this.panel.setCompact(compact)
+    this.debugPanel.setCompact(compact)
+    // Compact sheets are full width, so two side panels cannot stay open together.
+    if (compact && this.panel.isOpen() && this.debugPanel.isOpen()) this.debugPanel.close()
+  }
+
+  /**
+   * Shift the node panel left when the debug panel occupies the right side, then
+   * reserve the measured width of the rightmost panels for the toolbar.
+   */
   private syncPanelLayout() {
-    this.panel.setOffset(this.debugPanel.isOpen() ? this.debugPanel.width + 8 : 0)
+    const nodeOpen = this.panel.isOpen()
+    const debugOpen = this.debugPanel.isOpen()
+    const offset = !this.compact && debugOpen ? this.debugPanel.width + UI_GAP : 0
+    this.panel.setOffset(offset)
+    if (this.compact) {
+      this.toolbar.setRightInset(0)
+      return
+    }
+    const rootRect = this.overlay.rect()
+    const nodeRect = this.overlay.root.querySelector<HTMLElement>('.bpgraph-node-panel')?.getBoundingClientRect()
+    const debugRect = this.overlay.root.querySelector<HTMLElement>('.bpgraph-debug-panel')?.getBoundingClientRect()
+    const measurable = rootRect.width > 0
+    const nodeInset = measurable && nodeRect && nodeRect.width > 0
+      ? rootRect.right - nodeRect.left
+      : nodeOpen ? UI_GAP + offset + this.panel.width : 0
+    const debugInset = measurable && debugRect && debugRect.width > 0
+      ? rootRect.right - debugRect.left
+      : debugOpen ? UI_GAP + this.debugPanel.width : 0
+    this.toolbar.setRightInset(Math.max(nodeInset, debugInset))
   }
 
   // ---- Configuration ----------------------------------------------------
@@ -593,7 +793,7 @@ export class CanvasUI {
 
   private get toolbarOptions(): ToolbarOptions | null {
     const value = this.graph.options.toolbar
-    // Explicitly disabling the toolbar hides debug toggles; unspecified toolbars use default positioning.
+    // Explicitly disabling the toolbar hides panel toggles; unspecified toolbars use default positioning.
     if (value === false) return null
     if (value === undefined || value === true) return { actions: [] }
     return value

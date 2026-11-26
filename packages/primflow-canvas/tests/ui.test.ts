@@ -4,10 +4,10 @@
 // on/off/el, adapter lookup and selection, and imperative Graph APIs; minimal stubs suffice.
 import './svg-shim'
 import { afterEach, expect, test, vi } from 'vitest'
-import { html, render } from 'lit-html'
+import { html, nothing, render } from 'lit-html'
 import { dia } from '@joint/core'
 import type { InputPort } from '@lyx-pj/primflow-model'
-import { Node, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
+import { DataTypeRegistry, defineNode, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
 import { Graph, type NodeInstanceType } from '../src/Graph'
 import { UndoManager } from '../src/UndoManager'
 import type { GraphAdapter } from '../src/adapters/GraphAdapter'
@@ -15,20 +15,23 @@ import { CanvasUI } from '../src/ui/CanvasUI'
 import { NodeToolView, NodeToolsView } from '../src/NodeToolsView'
 import { portEditorTemplate } from '../src/ui/portEditors'
 import { renderNodeHeader } from '../src/ui/nodeHeader'
+import { EditorRegistry } from '../src/ui/editors'
 
-class Hello extends Node {
-  static definition = {
+const Hello = defineNode({
+  definition: {
     type: 'default',
     title: 'Hello',
     inputs: [{ name: 'exec', type: 'exec' }] as const,
     outputs: [{ name: 'ok', type: 'exec' }] as const,
-  }
-}
+  },
+})
 
 type PaperHandler = (...args: unknown[]) => void
 
-function createHarness(graphOptions: Record<string, unknown> = {}) {
+function createHarness(graphOptions: Record<string, unknown> = {}, layoutWidth = 0) {
   const container = document.createElement('div')
+  let width = layoutWidth
+  Object.defineProperty(container, 'clientWidth', { configurable: true, get: () => width })
   document.body.appendChild(container)
 
   const nodes: NodeInstanceType[] = []
@@ -44,7 +47,7 @@ function createHarness(graphOptions: Record<string, unknown> = {}) {
       graph.scale = scale
       handlers.get('scale')?.forEach(handler => handler(scale, scale))
     }),
-    nodeRegistry: { getNodeClasses: vi.fn(() => [Hello]) },
+    nodeRegistry: { dataTypes: new DataTypeRegistry(), getNodeClasses: vi.fn(() => [Hello]) },
     model: { subgraphStack: [{ id: 'root' }], isLoopBody: () => false, hasSubgraph: vi.fn(() => false) },
     selection: new Set<unknown>(),
     skipsUndoManager: false,
@@ -85,8 +88,11 @@ function createHarness(graphOptions: Record<string, unknown> = {}) {
     canGoBack: Graph.prototype.canGoBack,
     goBack: Graph.prototype.goBack,
     canDeleteSelection: vi.fn(() => true),
+    getNodes: () => nodes,
+    getLinks: () => [],
     getNodeExecutionStatus: vi.fn(() => 'idle'),
     getNodeExecutionData: vi.fn(),
+    getNodeProgress: vi.fn(),
     findNode: vi.fn(() => undefined),
     findNodeAnywhere: vi.fn(() => undefined),
     isReplayMode: vi.fn(() => false),
@@ -104,6 +110,7 @@ function createHarness(graphOptions: Record<string, unknown> = {}) {
     selectionChanged: vi.fn(() => graph.emit('selection:changed', [...graph.selection])),
     clearSelection: vi.fn(() => graph.selection.clear()),
     select: vi.fn((item: unknown) => graph.selection.add(item)),
+    refreshLinkEndpointTools: vi.fn(),
     cancelSelection,
     getNodeSize: () => ({ width: 100, height: 40 }),
   }
@@ -135,6 +142,9 @@ function createHarness(graphOptions: Record<string, unknown> = {}) {
     paper,
     nodes,
     deleted,
+    setLayoutWidth(value: number) {
+      width = value
+    },
     emitPaper(event: string, ...args: unknown[]) {
       handlers.get(event)?.forEach((handler) => handler(...args))
     },
@@ -150,11 +160,20 @@ function createHarness(graphOptions: Record<string, unknown> = {}) {
 
 let current: ReturnType<typeof createHarness> | null = null
 
+/** Open the right-hand panel through its toolbar toggle. */
+function openNodePanel() {
+  if (!current!.container.querySelector('.bpgraph-node-panel')) {
+    current!.container.querySelector<HTMLButtonElement>('[data-action="node-panel"]')?.click()
+  }
+  return current!.container.querySelector<HTMLElement>('.bpgraph-node-panel')
+}
+
 afterEach(() => {
   current?.ui.destroy()
   current = null
   document.body.innerHTML = ''
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 function previewNode(id = 'preview-node') {
@@ -170,7 +189,7 @@ function previewNode(id = 'preview-node') {
   return node
 }
 
-test('completed nodes show inputs and outputs; pending nodes do not; supports circular references and BigInt', () => {
+test('completed nodes show inputs and outputs; supports circular references and BigInt', () => {
   current = createHarness()
   const node = previewNode()
   const cycle: Record<string, unknown> = { count: 1n }
@@ -181,31 +200,96 @@ test('completed nodes show inputs and outputs; pending nodes do not; supports ci
     outputs: { result: cycle, repeated: { first: shared, second: shared } },
   })
   current.ui.refreshNodeExecutionPreview(node.id)
-  const card = current.container.querySelector('[role="tooltip"]')!
+  const card = current.container.querySelector('.bpgraph-node-preview')!
   expect(card.textContent).toContain('Inputs')
   expect(card.textContent).toContain('Outputs')
   expect(card.textContent).toContain('<img src=x onerror=alert(1)>')
   expect(card.querySelector('img')).toBeNull()
   for (const value of ['false', 'null', 'undefined', '1n', '[Circular reference]']) expect(card.textContent).toContain(value)
   expect(card.textContent?.match(/Repeated references remain visible/g)).toHaveLength(2)
+})
 
-  for (const status of ['idle', 'pending', 'running']) {
+test('hovered nodes display live status labels and hide port data until completion', () => {
+  current = createHarness()
+  const node = previewNode()
+  const card = () => current!.container.querySelector<HTMLElement>('.bpgraph-node-preview')
+  current.graph.getNodeExecutionStatus.mockReturnValue('idle')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(card()).toBeNull()
+
+  current.graph.executionStatus = 'running'
+  current.ui.refreshExecutionStatus()
+  for (const [status, label] of [
+    ['idle', 'Idle'], ['pending', 'Pending'], ['running', 'Executing'], ['skipped', 'Skipped'],
+    ['failed', 'Failed'], ['cancelled', 'Cancelled'], ['interrupted', 'Waiting for external input'],
+  ]) {
     current.graph.getNodeExecutionStatus.mockReturnValue(status)
     current.ui.refreshNodeExecutionPreview(node.id)
-    current.emitGraph('node:mouseenter', node)
-    expect(current.container.querySelector('[role="tooltip"]')).toBeNull()
+    expect(card()?.getAttribute('aria-label')).toBe('Hello execution status')
+    expect(card()?.querySelector(`.is-${status}`)?.textContent).toBe(label)
+    expect(card()?.querySelector('section')).toBeNull()
+    expect(card()?.textContent).not.toContain('Actual input')
   }
+  current.graph.getNodeExecutionStatus.mockReturnValue('completed')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(card()?.getAttribute('aria-label')).toBe('Hello execution data')
+  expect(card()?.textContent).toContain('Actual input')
+})
+
+test('retry details use localized copy and hide the budget after completion', () => {
+  current = createHarness({ language: 'zh' })
+  const node = previewNode()
+  const card = () => current!.container.querySelector('.bpgraph-node-preview')?.textContent
+  const previousFailure = { code: 'UNAVAILABLE', message: 'The input was unavailable' }
+  current.graph.getNodeExecutionData.mockReturnValue({
+    inputs: {}, outputs: {}, attempt: { number: 2, maxRetries: 2, remainingRetries: 1, previousFailure },
+  })
+  current.graph.getNodeExecutionStatus.mockReturnValue('running')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(card()).toContain('已重试 1 次')
+  expect(card()).toContain('还可重试 1 次')
+  expect(card()).toContain('重试原因')
+
+  current.graph.getNodeExecutionStatus.mockReturnValue('completed')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(card()).toContain('已完成')
+  expect(card()).not.toContain('还可重试')
+  expect(card()).toContain(previousFailure.message)
+
+  current.graph.getNodeExecutionStatus.mockReturnValue('failed')
+  current.graph.getNodeExecutionData.mockReturnValue({
+    inputs: {}, outputs: {}, attempt: { number: 3, maxRetries: 2, remainingRetries: 0, failure: previousFailure },
+  })
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(card()).toContain('重试次数已用完')
+  expect(card()).not.toContain('重试原因')
+  expect(card()).toContain(previousFailure.message)
+})
+
+test('replay and retained cancellation expose status labels outside a live run', () => {
+  current = createHarness()
+  const node = previewNode()
+  const label = () => current!.container.querySelector('.bpgraph-node-preview-header span')?.textContent
+  current.graph.getNodeExecutionStatus.mockReturnValue('cancelled')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(label()).toBe('Cancelled')
+  current.graph.getNodeExecutionStatus.mockReturnValue('idle')
+  current.ui.refreshNodeExecutionPreview(node.id)
+  expect(label()).toBeUndefined()
+  current.graph.isReplayMode.mockReturnValue(true)
+  current.emitGraph('node:mouseenter', node)
+  expect(label()).toBe('Idle')
 })
 
 test('late mouseleave events do not read disposed nodes', () => {
   current = createHarness()
   const node = previewNode()
-  expect(current.container.querySelector('[role="tooltip"]')).toBeTruthy()
+  expect(current.container.querySelector('.bpgraph-node-preview')).toBeTruthy()
 
   // Entering a subgraph removes old nodes before delayed mouseleave events arrive.
   current.emitGraph('node:removed', [node], { type: 'removed' })
   expect(() => current!.emitGraph('node:mouseleave', undefined)).not.toThrow()
-  expect(current.container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(current.container.querySelector('.bpgraph-node-preview')).toBeNull()
 })
 
 test('only the active breakpoint previews inputs, hides Outputs, and supports card hover and delayed closing', () => {
@@ -217,7 +301,7 @@ test('only the active breakpoint previews inputs, hides Outputs, and supports ca
   current.graph.pausedNodeId = node.id
   current.graph.getNodeExecutionData.mockReturnValue({ inputs: { value: 0 }, outputs: { old: 'Previous output' } })
   current.ui.refreshNodeExecutionPreview(node.id)
-  const card = () => current!.container.querySelector<HTMLElement>('[role="tooltip"]')!
+  const card = () => current!.container.querySelector<HTMLElement>('.bpgraph-node-preview')!
   expect(card().textContent).toContain('Paused at breakpoint')
   expect(card().querySelector('h4')?.textContent).toBe('Inputs')
   expect(card().querySelector('pre')?.textContent).toBe('0')
@@ -236,21 +320,23 @@ test('only the active breakpoint previews inputs, hides Outputs, and supports ca
 
   current.graph.pausedNodeId = 'other-node'
   current.ui.refreshNodeExecutionPreview(node.id)
-  current.emitGraph('node:mouseenter', node)
-  expect(card()).toBeNull()
+  expect(card().textContent).toContain('Pending')
+  expect(card().querySelector('section')).toBeNull()
 
   current.graph.pausedNodeId = node.id
-  current.emitGraph('node:mouseenter', node)
+  current.ui.refreshExecutionStatus()
+  expect(card().textContent).toContain('Paused at breakpoint')
   current.graph.executionStatus = 'running'
-  current.ui.refreshNodeExecutionPreview(node.id)
-  expect(card()).toBeNull()
+  current.ui.refreshExecutionStatus()
+  expect(card().textContent).toContain('Pending')
+  expect(card().querySelector('section')).toBeNull()
 })
 
 test('leaving nodes closes after a delay; hovering the card or node cancels closing; scrolling does not zoom canvas', () => {
   vi.useFakeTimers()
   current = createHarness()
   const node = previewNode()
-  const card = () => current!.container.querySelector<HTMLElement>('[role="tooltip"]')!
+  const card = () => current!.container.querySelector<HTMLElement>('.bpgraph-node-preview')!
   current.emitGraph('node:mouseleave', node)
   vi.advanceTimersByTime(200)
   expect(card()).toBeTruthy()
@@ -283,11 +369,11 @@ test('switching ignores stale leave events; empty data shows hints; bottom-right
   const second = previewNode('second')
   current.emitGraph('node:mouseleave', first)
   vi.advanceTimersByTime(300)
-  expect(current.container.querySelector('[role="tooltip"]')).toBeTruthy()
+  expect(current.container.querySelector('.bpgraph-node-preview')).toBeTruthy()
 
   const anchor = current.paper.findViewByModel.mock.results.at(-1)!.value.el as Element
   vi.mocked(anchor.getBoundingClientRect).mockReturnValue(new DOMRect(750, 580, 80, 40))
-  const card = current.container.querySelector<HTMLElement>('[role="tooltip"]')!
+  const card = current.container.querySelector<HTMLElement>('.bpgraph-node-preview')!
   Object.defineProperties(card, { offsetWidth: { value: 360 }, offsetHeight: { value: 300 } })
   current.graph.getNodeExecutionData.mockReturnValue({ inputs: {}, outputs: {} })
   current.ui.refreshNodeExecutionPreview(second.id)
@@ -307,12 +393,12 @@ test('Esc、viewport changes, subgraph switches, node deletion, and destroy clos
     const node = previewNode()
     current.emitGraph('node:mouseleave', node)
     current.emitGraph(event, [])
-    expect(current.container.querySelector('[role="tooltip"]')).toBeNull()
+    expect(current.container.querySelector('.bpgraph-node-preview')).toBeNull()
     expect(vi.getTimerCount()).toBe(0)
   }
   previewNode()
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-  expect(current.container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(current.container.querySelector('.bpgraph-node-preview')).toBeNull()
   const node = previewNode()
   current.emitGraph('node:mouseleave', node)
   current.ui.destroy()
@@ -343,7 +429,11 @@ test('palette renders registered nodes and inserts them at the pointer', () => {
 })
 
 test('palette supports multiple entries for one class and applies entry defaults', () => {
-  class Call extends Hello { static readonly type = 'call' }
+  const Call = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'call',
+  })
   current = createHarness({ palette: {
     items: () => [Hello],
     entries: () => [
@@ -366,11 +456,16 @@ test('palette supports multiple entries for one class and applies entry defaults
 })
 
 test('loop body palettes hide event sources and persistent timers', () => {
-  class Step extends Hello { static readonly type = 'step' }
-  class Source extends Hello {
-    static readonly type = 'source'
-    static definition = { ...Hello.definition, executionMode: 'source' as const }
-  }
+  const Step = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'step',
+  })
+  const Source = defineNode({
+    ...Hello,
+    type: 'source',
+    definition: { ...Hello.definition, executionMode: 'source' as const },
+  })
   current = createHarness({ palette: { items: () => [Step, Source] } })
   current.graph.model.isLoopBody = () => true
   current.ui.openPalette(20, 20)
@@ -393,8 +488,16 @@ test('palette filters by title and closes on Esc', () => {
 })
 
 test('palette groups categories, combines filtering and search, and resets filters on reopen', () => {
-  class TextNode extends Hello { static readonly type = 'text' }
-  class LogNode extends Hello { static readonly type = 'log' }
+  const TextNode = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'text',
+  })
+  const LogNode = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'log',
+  })
   current = createHarness({ palette: {
     items: () => [TextNode, LogNode, Hello],
     describe: (nodeClass: typeof Hello) => nodeClass === TextNode
@@ -416,7 +519,7 @@ test('palette groups categories, combines filtering and search, and resets filte
   expect(container.querySelector('.bpgraph-palette-item')?.textContent).not.toContain('Provide text')
   expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
   item.focus()
-  const tooltip = container.querySelector('[role="tooltip"]')!
+  const tooltip = container.querySelector('.bpgraph-palette-tooltip')!
   expect(tooltip.textContent?.trim()).toBe('Provide text')
   expect(item.getAttribute('aria-describedby')).toBe(tooltip.id)
   const icon = container.querySelector('.bpgraph-palette-icon')!
@@ -437,9 +540,21 @@ test('palette groups categories, combines filtering and search, and resets filte
 })
 
 test('search matches names, categories, descriptions, and types; descriptions appear in tooltips; Enter adds the first grouped result', () => {
-  class First extends Hello { static readonly type = 'first' }
-  class Second extends Hello { static readonly type = 'second' }
-  class Third extends Hello { static readonly type = 'third' }
+  const First = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'first',
+  })
+  const Second = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'second',
+  })
+  const Third = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'third',
+  })
   current = createHarness({ palette: {
     items: () => [First, Second, Third],
     describe: (nodeClass: typeof Hello) => ({
@@ -460,7 +575,7 @@ test('search matches names, categories, descriptions, and types; descriptions ap
   expect(item.hasAttribute('title')).toBe(false)
   expect(container.textContent).not.toContain('<img src=x onerror=alert(1)>')
   item.focus()
-  expect(container.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('<img src=x onerror=alert(1)>')
+  expect(container.querySelector('.bpgraph-palette-tooltip')?.textContent?.trim()).toBe('<img src=x onerror=alert(1)>')
   expect(container.querySelector('img')).toBeNull()
   for (const query of ['First category', 'second', 'onerror']) {
     setQuery(query)
@@ -477,7 +592,11 @@ test('search matches names, categories, descriptions, and types; descriptions ap
 
 test('descriptions appear after a delay, allow tooltip hover, and do not show stale content on rapid switching', () => {
   vi.useFakeTimers()
-  class Other extends Hello { static readonly type = 'other' }
+  const Other = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'other',
+  })
   current = createHarness({ palette: {
     items: () => [Hello, Other],
     describe: (nodeClass: typeof Hello) => ({ description: nodeClass === Hello ? 'First description' : 'Second description' }),
@@ -524,7 +643,7 @@ test('tooltip overlays sit outside scrolling lists and shift left within canvas 
     const item = current.container.querySelector<HTMLButtonElement>('.bpgraph-palette-item')!
     vi.spyOn(item, 'getBoundingClientRect').mockReturnValue(new DOMRect(750, 620, 80, 30))
     item.focus()
-    const tooltip = current.container.querySelector<HTMLElement>('[role="tooltip"]')!
+    const tooltip = current.container.querySelector<HTMLElement>('.bpgraph-palette-tooltip')!
     expect(tooltip.closest('.bpgraph-palette-list')).toBeNull()
     expect(parseFloat(tooltip.style.left) + 220).toBeLessThan(750 - 50)
     expect(parseFloat(tooltip.style.top) + 48).toBeLessThanOrEqual(600 - 8)
@@ -542,26 +661,26 @@ test('scrolling, filtering, dragging, and closing hide tooltips; destroy clears 
     ui.openPalette(120, 80)
     const item = container.querySelector<HTMLButtonElement>('.bpgraph-palette-item')!
     item.focus()
-    expect(container.querySelector('[role="tooltip"]')).toBeTruthy()
+    expect(container.querySelector('.bpgraph-palette-tooltip')).toBeTruthy()
     return item
   }
   focusItem()
   container.querySelector('.bpgraph-palette-list')!.dispatchEvent(new Event('scroll'))
-  expect(container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
   focusItem()
   const search = container.querySelector<HTMLInputElement>('.bpgraph-palette-search')!
   search.value = 'missing'
   search.dispatchEvent(new Event('input', { bubbles: true }))
-  expect(container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
   const item = focusItem()
   const drag = new Event('dragstart') as DragEvent
   Object.defineProperty(drag, 'dataTransfer', { value: { setData: vi.fn(), effectAllowed: '' } })
   item.dispatchEvent(drag)
-  expect(container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
   document.dispatchEvent(new Event('dragend'))
   focusItem()
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-  expect(container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
   ui.openPalette(120, 80)
   // Flush queued browser focus events before checking tooltip timers independently.
   vi.runOnlyPendingTimers()
@@ -572,7 +691,7 @@ test('scrolling, filtering, dragging, and closing hide tooltips; destroy clears 
   current = null
   expect(vi.getTimerCount()).toBe(0)
   vi.advanceTimersByTime(500)
-  expect(container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(container.querySelector('.bpgraph-palette-tooltip')).toBeNull()
 })
 
 test('subgraph palettes hide Start, refresh category counts, and support closing', () => {
@@ -773,21 +892,21 @@ test('canvas and empty overlay layers suppress native context menus until destro
   current = null
 })
 
-test('right-click selection opens only the menu and does not open node panels', () => {
+test('right-click selection opens the menu and updates the open node panel', () => {
   current = createHarness()
   const node = createNodeStub()
-  const other = createNodeStub({ id: 'node-2' })
+  const other = createNodeStub({ id: 'node-2', title: 'Other' })
   current.adapter.findNode.mockImplementation((id: string) => id === other.id ? other : node)
   current.emitPaper('element:contextmenu', { model: { id: node.id } },
     { clientX: 10, clientY: 10, preventDefault: vi.fn() }, 10, 10)
 
   expect(current.graph.selection.has(node)).toBe(true)
   expect(current.container.querySelector('.bpgraph-context')).toBeTruthy()
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Test Switch')
 
   current.emitGraph('selection:changed', [other])
   expect(current.graph.selection.has(other)).toBe(true)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Other')
 })
 
 test('menu mousedown / pointerdown events do not bubble into canvas selection', () => {
@@ -827,7 +946,7 @@ test('palette dragging cancels stale selection boxes first', () => {
 test('palette defaults inject business values', () => {
   current = createHarness()
   current.graph.options.palette = {
-    defaults: () => ({ values: { greeting: 'hi' } }),
+    defaults: () => ({ inputValues: { greeting: 'hi' } }),
   }
 
   current.ui.openPalette(0, 0)
@@ -835,7 +954,7 @@ test('palette defaults inject business values', () => {
     .querySelector<HTMLButtonElement>('.bpgraph-palette-item')!
     .dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
-  expect(current.graph.addNode).toHaveBeenCalledWith(Hello, { values: { greeting: 'hi' } })
+  expect(current.graph.addNode).toHaveBeenCalledWith(Hello, { inputValues: { greeting: 'hi' } })
 })
 
 test('floating toolbars render lit templates and track node positions', () => {
@@ -889,7 +1008,7 @@ test('port editor templates: text / number / dropdown', () => {
 
   render(
     portEditorTemplate(
-      { name: 'mode', type: 'select', _options: [{ label: 'A', value: 'a' }] } as InputPort,
+      { name: 'mode', type: 'string', editor: 'select', _options: [{ label: 'A', value: 'a' }] } as InputPort,
       style,
       { mode: 'a' },
       handlers
@@ -951,6 +1070,12 @@ test('node titles show breakpoint indicators and remove them when cleared', () =
   expect(group.querySelector('[aria-label="Breakpoint"]')).toBeNull()
 })
 
+/**
+ * Wait for the JSON code editor to commit its value.
+ *
+ * The editor parses the document and writes the node value after a short
+ * delay, so the test must wait past that delay.
+ */
 function createNodeStub(overrides: Record<string, unknown> = {}) {
   return {
     id: 'node-1',
@@ -966,7 +1091,7 @@ function createNodeStub(overrides: Record<string, unknown> = {}) {
       { name: 'default', type: 'exec', id: 'out-0' },
       { name: 'condition', type: 'string', id: 'out-1' },
     ],
-    values: { case_1_value: 'a' },
+    inputValues: { case_1_value: 'a' },
     ...overrides,
   } as unknown as NodeInstanceType
 }
@@ -976,6 +1101,7 @@ test('single selection renders the node panel inside canvas', () => {
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
 
   const panel = current.container.querySelector('.bpgraph-node-panel')
   expect(panel).toBeTruthy()
@@ -985,8 +1111,34 @@ test('single selection renders the node panel inside canvas', () => {
   expect(panel!.querySelector<HTMLInputElement>('[data-field="case_1_value"]')!.value).toBe('a')
 })
 
+test('node panel shows the definition name below a custom title', () => {
+  current = createHarness()
+  current.graph.options.language = 'zh'
+  const node = createNodeStub({
+    id: 'node-42',
+    type: 'subgraph',
+    nodeType: 'subgraph',
+    definition: { name: 'Subgraph' },
+    title: 'Fetch customer profile',
+  })
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  expect(panel.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Fetch customer profile')
+  expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('定义名称: Subgraph')
+  expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('定义 ID: subgraph')
+  expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('实例 ID: node-42')
+  expect(panel.querySelector('.bpgraph-node-panel-meta')?.textContent).toContain('行为类别: 子图')
+})
+
 test('node descriptions appear below Outputs as plain text with preserved newlines', () => {
-  class Described extends Hello { static readonly type = 'described' }
+  const Described = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+  })
+  new NodeRegistry().register('described', Described)
   const description = 'Additional node description\n<img src=x onerror=alert(1)>'
   const describe = vi.fn(() => ({ description }))
   current = createHarness({ palette: { describe } })
@@ -994,6 +1146,7 @@ test('node descriptions appear below Outputs as plain text with preserved newlin
   const node = new NodeInstance(Described, { id: 'described-node' })
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
 
   const panel = current.container.querySelector('.bpgraph-node-panel')!
   const sections = [...panel.querySelectorAll('.bpgraph-node-panel-section')]
@@ -1006,9 +1159,20 @@ test('node descriptions appear below Outputs as plain text with preserved newlin
 })
 
 test('switching nodes updates descriptions and hides missing or unregistered descriptions', () => {
-  class First extends Hello { static readonly type = 'first' }
-  class Second extends Hello { static readonly type = 'second' }
-  class Unknown extends Hello { static readonly type = 'unknown' }
+  const First = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+  })
+  const Second = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+  })
+  const Unknown = defineNode({
+    ...Hello,
+    definition: Hello.definition,
+    type: 'unknown',
+  })
+  new NodeRegistry().register('first', First).register('second', Second)
   current = createHarness({ palette: { describe: (nodeClass: typeof Hello) => (
     nodeClass === First ? { description: 'First node description' } : { description: '  ' }
   ) } })
@@ -1017,6 +1181,7 @@ test('switching nodes updates descriptions and hides missing or unregistered des
     const node = new NodeInstance(nodeClass, { id: nodeClass.type })
     current.adapter.findNode.mockReturnValue(node)
     current.emitGraph('selection:changed', [node])
+    openNodePanel()
     const description = current.container.querySelector('.bpgraph-node-panel-description')
     if (nodeClass === First) expect(description?.textContent).toBe('First node description')
     else expect(description).toBeNull()
@@ -1028,31 +1193,36 @@ test('editing panel values writes back to the node', () => {
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
 
   const field = current.container.querySelector<HTMLInputElement>('[data-field="case_1_value"]')!
   field.value = 'b'
   field.dispatchEvent(new Event('input', { bubbles: true }))
 
-  expect(node.values).toEqual({ case_1_value: 'b' })
+  expect(node.inputValues).toEqual({ case_1_value: 'b' })
 })
 
-test('Start panels omit trigger hints, Inputs, Outputs, and execution previews', () => {
+test('Start settings omit data sections while hover shows the execution status', () => {
   current = createHarness()
   const registry = new NodeRegistry()
   const node = new NodeInstance(registry.getStartNodeClass(), { id: 'start' })
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
   const panel = current.container.querySelector('.bpgraph-node-panel')!
   expect(panel.textContent).not.toContain('Trigger downstream nodes through execution ports')
   expect(panel.querySelectorAll('.bpgraph-node-panel-section')).toHaveLength(0)
   expect(panel.textContent).not.toContain('Inputs')
   expect(panel.textContent).not.toContain('Outputs')
+  current.paper.findViewByModel.mockReturnValue({ el: panel })
   for (const status of ['running', 'paused'] as const) {
     current.graph.executionStatus = status
     current.graph.pausedNodeId = status === 'paused' ? node.id : null
     current.graph.getNodeExecutionStatus.mockReturnValue(status === 'paused' ? 'pending' : 'completed')
     current.emitGraph('node:mouseenter', node)
-    expect(current.container.querySelector('[role="tooltip"]')).toBeNull()
+    const card = current.container.querySelector('.bpgraph-node-preview')!
+    expect(card.textContent).toContain(status === 'paused' ? 'Paused at breakpoint' : 'Completed')
+    expect(card.querySelector('section')).toBeNull()
   }
 })
 
@@ -1061,6 +1231,7 @@ test('panel case deletion uses graph.removeSwitchCase and hides the last delete 
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
 
   const buttons = current.container.querySelectorAll('.bpgraph-node-panel-danger')
   expect(buttons).toHaveLength(2)
@@ -1078,24 +1249,27 @@ test('panel case deletion uses graph.removeSwitchCase and hides the last delete 
   expect(current.container.querySelector('.bpgraph-node-panel-danger')).toBeNull()
 })
 
-test('multiple selection hides panels; clearing then selecting one reopens them', () => {
+test('multiple selection keeps the open panel on the overview', () => {
   current = createHarness()
   const node = createNodeStub()
   const other = createNodeStub({ id: 'node-2' })
   current.adapter.findNode.mockImplementation((id: string) => (id === 'node-2' ? other : node))
+  const panel = () => current!.container.querySelector('.bpgraph-node-panel')
+  const title = () => current!.container.querySelector('.bpgraph-node-panel-title')?.textContent
 
   current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(panel()).toBeTruthy()
+  expect(title()).toBe('Test Switch')
 
   current.emitGraph('selection:changed', [node, other])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-
-  current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(panel()).toBeTruthy()
+  expect(title()).toBe('Graph overview')
 
   current.emitGraph('selection:changed', [])
+  expect(title()).toBe('Graph overview')
+
   current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(title()).toBe('Test Switch')
 })
 
 test('closing a panel preserves selection and keeps it hidden when selection changes', () => {
@@ -1104,6 +1278,7 @@ test('closing a panel preserves selection and keeps it hidden when selection cha
   const other = createNodeStub({ id: 'node-2' })
   current.adapter.findNode.mockImplementation((id: string) => id === other.id ? other : node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
   current.container
     .querySelector<HTMLButtonElement>('.bpgraph-node-panel-close')!
     .dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1121,6 +1296,7 @@ test('an open panel updates when selecting or right-clicking another node', () =
   const other = createNodeStub({ id: 'node-2', title: 'Other' })
   current.adapter.findNode.mockImplementation((id: string) => id === other.id ? other : node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
   current.emitGraph('selection:changed', [other])
   expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Other')
 
@@ -1138,7 +1314,7 @@ test.each([
   '<svg><g port="in-1"><rect data-port-field="flag" /></g></svg>',
   '<svg><g port="in-1"><polyline class="bpgraph-port-check" /></g></svg>',
   '<svg><g port="out-1"><text>Output</text></g></svg>',
-])('clicking node controls or ports selects without opening panels: %s', (markup) => {
+])('clicking node controls or ports selects the node: %s', (markup) => {
   current = createHarness()
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
@@ -1154,12 +1330,7 @@ test.each([
   target.dispatchEvent(event)
 
   expect(current.graph.selection.has(node)).toBe(true)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-
-  current.emitGraph('selection:changed', [])
-  current.emitGraph('node:click', node, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Test Switch')
 })
 
 test('nodePanel=false does not render node panels', () => {
@@ -1177,154 +1348,447 @@ test('nodePanel.extra renders application-specific settings', () => {
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
 
   const extra = current.container.querySelector('.bpgraph-node-panel-extra')
   expect(extra).toBeTruthy()
   expect(extra!.textContent).toContain('extra:node-1')
 })
 
+test('a registered panel editor replaces the built-in control of a port', () => {
+  current = createHarness()
+  current.graph.editors = new EditorRegistry()
+  current.graph.editors.register('string', {
+    panel: { render: (ctx) => html`<button class="custom-panel" data-value=${String(ctx.value)}>Custom</button>` },
+  })
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')
+  expect(panel!.querySelectorAll('.custom-panel')).toHaveLength(2)
+  // The built-in text input is replaced by the registered editor.
+  expect(panel!.querySelector('.bpgraph-node-panel-field input')).toBeNull()
+})
+
+test('a registered panel editor writes values back to the node', () => {
+  current = createHarness()
+  current.graph.editors = new EditorRegistry()
+  current.graph.editors.register('string', {
+    panel: { render: (ctx) => html`<button class="custom-panel" @click=${() => ctx.setValue('written')}>Set</button>` },
+  })
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  current.container.querySelector<HTMLButtonElement>('.custom-panel')!.click()
+  expect(node.inputValues.case_1_value).toBe('written')
+})
+
+test('panel sections can hide built-in blocks', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = { sections: () => ['meta', 'inputs'] }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  const titles = [...panel.querySelectorAll('.bpgraph-node-panel-section-title')].map((el) => el.textContent)
+  expect(titles).toEqual(['Inputs'])
+  expect(panel.querySelector('.bpgraph-node-panel-meta')).toBeTruthy()
+})
+
+test('panel sections can reorder built-in blocks', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = { sections: () => ['outputs', 'inputs'] }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  const titles = [...panel.querySelectorAll('.bpgraph-node-panel-section-title')].map((el) => el.textContent)
+  expect(titles).toEqual(['Outputs', 'Inputs'])
+})
+
+test('panel sections can insert application content', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = {
+    sections: (node) => [
+      'meta',
+      { id: 'custom', render: (ctx) => html`<div class="app-section">app:${ctx.node.id}:${node.id}</div>` },
+    ],
+  }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const section = current.container.querySelector('.bpgraph-node-panel-scroll .app-section')
+  expect(section!.textContent).toBe('app:node-1:node-1')
+  // Only the meta block and the application section remain.
+  expect(current.container.querySelector('.bpgraph-node-panel-section-title')).toBeNull()
+})
+
+test('panel sections returning an empty list leave only the header', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = { sections: () => [] }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  expect(panel.querySelector('.bpgraph-node-panel-title')!.textContent).toBe('Test Switch')
+  expect(panel.querySelector('.bpgraph-node-panel-scroll')!.children).toHaveLength(0)
+})
+
+test('nodePanel.render replaces the whole content area and keeps the shell', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = {
+    width: 280,
+    render: (ctx) => html`<div class="app-panel">app:${ctx.node.id}</div>`,
+  }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector<HTMLElement>('.bpgraph-node-panel')!
+  // The application content replaces every section.
+  expect(panel.querySelector('.app-panel')!.textContent).toBe('app:node-1')
+  expect(panel.querySelector('.bpgraph-node-panel-field')).toBeNull()
+  expect(panel.querySelector('.bpgraph-node-panel-meta')).toBeNull()
+  // The shell stays: the header with its title and the close button.
+  expect(panel.querySelector('.bpgraph-node-panel-title')!.textContent).toBe('Test Switch')
+  expect(panel.querySelector('.bpgraph-node-panel-close')).toBeTruthy()
+  // The configured width applies to the shell, not the content.
+  expect(panel.style.width).toBe('280px')
+})
+
+test('nodePanel.render takes precedence over sections', () => {
+  current = createHarness()
+  const sections = vi.fn(() => ['inputs'] as const)
+  current.graph.options.nodePanel = {
+    sections,
+    render: () => html`<div class="app-panel">custom</div>`,
+  }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  expect(current.container.querySelector('.app-panel')).toBeTruthy()
+  expect(current.container.querySelector('.bpgraph-node-panel-section-title')).toBeNull()
+  expect(sections).not.toHaveBeenCalled()
+})
+
+test('nodePanel.render receives the node, graph, language, and a working close callback', () => {
+  current = createHarness({ language: 'zh' })
+  const seen: unknown[] = []
+  current.graph.options.nodePanel = {
+    render: (ctx) => {
+      seen.push({ node: ctx.node.id, graph: ctx.graph, language: ctx.language })
+      return html`<button class="app-close" @click=${() => ctx.close()}>Close</button>`
+    },
+  }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+  expect(seen[0]).toEqual({ node: 'node-1', graph: current.graph, language: 'zh' })
+  current.container.querySelector<HTMLButtonElement>('.app-close')!.click()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  // Closing through the application callback keeps the selection.
+  expect(current.graph.clearSelection).not.toHaveBeenCalled()
+})
+
+test('nodePanel.render returning nothing leaves an empty content area', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = { render: () => nothing }
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  expect(panel.querySelector('.bpgraph-node-panel-title')!.textContent).toBe('Test Switch')
+  expect(panel.querySelector('.bpgraph-node-panel-scroll')!.children).toHaveLength(0)
+})
+
+test('nodePanel.render runs again when the selection changes', () => {
+  current = createHarness()
+  current.graph.options.nodePanel = { render: (ctx) => html`<div class="app-panel">${ctx.node.id}</div>` }
+  const first = createNodeStub()
+  const second = createNodeStub({ id: 'node-2' })
+  current.adapter.findNode.mockImplementation((id: string) => id === second.id ? second : first)
+  current.emitGraph('selection:changed', [first])
+  openNodePanel()
+  expect(current.container.querySelector('.app-panel')!.textContent).toBe('node-1')
+
+  current.emitGraph('selection:changed', [second])
+  expect(current.container.querySelector('.app-panel')!.textContent).toBe('node-2')
+})
+
 function createContainerNode(overrides: Record<string, unknown> = {}) {
   return createNodeStub({ id: 'loop-1', type: 'loop', title: 'Loop', subgraphId: 'sg-1', ...overrides })
 }
 
-test.each([
-  { title: 'Embedded subgraph', type: 'loop', embedded: true },
-  { title: 'External subgraph', type: 'subgraph', embedded: false },
-])('$title first container click delays panel opening briefly to avoid flicker', ({ type, embedded }) => {
-  vi.useFakeTimers()
-  current = createHarness()
-  const node = createContainerNode({ type })
-  current.adapter.findNode.mockReturnValue(node)
-  current.graph.model.hasSubgraph.mockReturnValue(embedded)
-
-  current.emitGraph('node:click', node, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Loop')
-})
-
-test('double-clicking containers enters subgraphs without flashing panels', () => {
-  vi.useFakeTimers()
-  current = createHarness()
-  const node = createContainerNode()
-  current.adapter.findNode.mockReturnValue(node)
-  current.graph.model.hasSubgraph.mockReturnValue(true)
-
-  current.emitGraph('node:click', node, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [node])
-  // Entering subgraphs clears selection in the adapter.
-  current.emitGraph('selection:changed', [])
-
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-})
-
-test('external subgraph double-click cancels pending panels without awaiting host switching', () => {
-  vi.useFakeTimers()
-  current = createHarness()
-  const node = createContainerNode({ type: 'subgraph' })
-  current.adapter.findNode.mockReturnValue(node)
-
-  current.emitGraph('node:click', node, new MouseEvent('click', { detail: 1 }))
-  current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-
-  vi.advanceTimersByTime(100)
-  current.emitGraph('node:click', node, new MouseEvent('click', { detail: 2 }))
-  current.emitGraph('node:dblclick', node, new MouseEvent('dblclick', { detail: 2 }))
-  // External subgraphs open asynchronously; retain old selection without reopening panels on failure.
-  expect(current.graph.selection.has(node)).toBe(true)
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-})
-
-test.each([
-  { title: 'Embedded subgraph', type: 'loop', embedded: true },
-  { title: 'External subgraph', type: 'subgraph', embedded: false },
-])('double-clicking $title closes an open node panel', ({ type, embedded }) => {
-  vi.useFakeTimers()
-  current = createHarness()
-  const node = createContainerNode({ type })
-  current.adapter.findNode.mockReturnValue(node)
-  current.graph.model.hasSubgraph.mockReturnValue(embedded)
-
-  current.emitGraph('node:click', node, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [node])
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
-
-  current.emitGraph('node:dblclick', node, new MouseEvent('dblclick'))
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
-})
-
-test('selecting another node during a container delay opens the new panel', () => {
-  vi.useFakeTimers()
-  current = createHarness()
-  const node = createContainerNode()
-  const other = createNodeStub({ id: 'node-2', title: 'Other' })
-  current.adapter.findNode.mockImplementation((id: string) => (id === other.id ? other : node))
-  current.graph.model.hasSubgraph.mockReturnValue(true)
-
-  current.emitGraph('node:click', node, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [node])
-  current.emitGraph('node:click', other, new MouseEvent('click'))
-  current.emitGraph('selection:changed', [other])
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Other')
-
-  // Pending work must not replace another node's panel.
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Other')
-})
-
-test('selecting containers updates open panels immediately without delay', () => {
-  vi.useFakeTimers()
+test('selecting a container updates an open panel immediately', () => {
   current = createHarness()
   const node = createContainerNode()
   const other = createContainerNode({ id: 'loop-2', title: 'Another loop' })
   current.adapter.findNode.mockImplementation((id: string) => (id === other.id ? other : node))
   current.graph.model.hasSubgraph.mockReturnValue(true)
+  const title = () => current!.container.querySelector('.bpgraph-node-panel-title')?.textContent
 
+  openNodePanel()
+  expect(title()).toBe('Graph overview')
   current.emitGraph('node:click', node, new MouseEvent('click'))
   current.emitGraph('selection:changed', [node])
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Loop')
+  expect(title()).toBe('Loop')
 
   // An open panel must immediately display the newly selected container.
   current.emitGraph('node:click', other, new MouseEvent('click'))
   current.emitGraph('selection:changed', [other])
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Another loop')
-
-  // No delayed work should restore the old node's panel.
-  vi.advanceTimersByTime(200)
-  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Another loop')
+  expect(title()).toBe('Another loop')
 })
 
-test('clicking container controls cancels pending opening and keeps panels closed', () => {
-  vi.useFakeTimers()
+test('entering a subgraph keeps the panel open on the overview', () => {
   current = createHarness()
   const node = createContainerNode()
   current.adapter.findNode.mockReturnValue(node)
   current.graph.model.hasSubgraph.mockReturnValue(true)
 
-  current.emitGraph('node:click', node, new MouseEvent('click'))
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Loop')
 
-  const content = document.createElement('div')
-  content.innerHTML = '<input />'
-  current.container.appendChild(content)
-  const target = content.querySelector('input')!
-  const event = new MouseEvent('click', { bubbles: true })
-  target.addEventListener('click', () => {
-    current!.emitGraph('node:click', node, event)
-    current!.emitGraph('selection:changed', [node])
+  current.emitGraph('subgraph:enter', 'sg-1')
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Graph overview')
+})
+
+test('the overview lists nodes in the current view and locates a clicked node', () => {
+  current = createHarness()
+  const first = createNodeStub({ position: { x: 100, y: 100 } })
+  const second = createNodeStub({ id: 'node-2', title: 'Second node', position: { x: 400, y: 200 } })
+  current.nodes.push(first, second)
+  current.adapter.findNode.mockImplementation((id: string) => id === first.id ? first : id === second.id ? second : undefined)
+  current.ui.refreshNodePanel()
+  vi.spyOn(current.container, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 600))
+  const panel = current.container.querySelector<HTMLElement>('.bpgraph-node-panel')!
+  expect(panel.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Graph overview')
+
+  const tabs = [...panel.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Node', 'Global settings'])
+  expect(tabs[0].getAttribute('aria-selected')).toBe('true')
+  expect(tabs[1].getAttribute('aria-selected')).toBe('false')
+  expect(panel.querySelector('[role="tabpanel"]')?.getAttribute('aria-labelledby')).toBe(tabs[0].id)
+
+  const items = [...panel.querySelectorAll<HTMLButtonElement>('.bpgraph-node-panel-overview-item')]
+  expect(items.map((item) => item.textContent?.trim())).toEqual(['Test Switch', 'Second node'])
+  const list = panel.querySelector('ul.bpgraph-node-panel-overview-list')
+  expect(list?.getAttribute('aria-label')).toBe('Nodes in this view')
+
+  items[0].click()
+  expect(current.graph.selection.has(first)).toBe(true)
+  // The node center moves to the viewport center: 400 - (100 + 50), 300 - (100 + 20).
+  expect(current.graph.position).toEqual({ x: 250, y: 180 })
+  expect(panel.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Test Switch')
+})
+
+test('the overview shows an empty state without nodes', () => {
+  current = createHarness()
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  expect(panel.querySelector('.bpgraph-node-panel-empty')?.textContent).toBe('No nodes in this view')
+})
+
+test('tabs switch between node, overview, and global settings content', () => {
+  current = createHarness({
+    nodePanel: {
+      overview: () => html`<div class="app-overview">Application overview</div>`,
+      globalSettings: () => html`<div class="app-global-settings">Application settings</div>`,
+    },
   })
-  target.dispatchEvent(event)
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  const panel = () => current!.container.querySelector('.bpgraph-node-panel')!
+  const title = () => panel().querySelector('.bpgraph-node-panel-title')?.textContent
+  const tabs = () => [...panel().querySelectorAll<HTMLButtonElement>('[role="tab"]')]
 
-  vi.advanceTimersByTime(200)
+  openNodePanel()
+  expect(title()).toBe('Graph overview')
+  expect(panel().querySelector('.app-overview')?.textContent).toBe('Application overview')
+
+  tabs()[1].click()
+  expect(title()).toBe('Global settings')
+  expect(panel().querySelector('.app-global-settings')?.textContent).toBe('Application settings')
+  expect(tabs()[1].getAttribute('aria-selected')).toBe('true')
+
+  current.emitGraph('selection:changed', [node])
+  // Selecting a node brings its settings forward.
+  expect(title()).toBe('Test Switch')
+  expect(tabs()[0].getAttribute('aria-selected')).toBe('true')
+  expect(panel().querySelectorAll('.bpgraph-node-panel-field')).toHaveLength(2)
+
+  tabs()[1].click()
+  expect(title()).toBe('Global settings')
+  // Clearing the selection leaves the chosen tab in place.
+  current.emitGraph('selection:changed', [])
+  expect(title()).toBe('Global settings')
+
+  tabs()[0].click()
+  expect(title()).toBe('Graph overview')
+  expect(panel().querySelector('.app-overview')).toBeTruthy()
+})
+
+test('selecting a node while closed reopens on the Node tab', () => {
+  current = createHarness({ nodePanel: { globalSettings: () => html`<p>Settings</p>` } })
+  const node = createNodeStub()
+  current.adapter.findNode.mockReturnValue(node)
+  const panel = () => current!.container.querySelector('.bpgraph-node-panel')!
+
+  openNodePanel()
+  panel().querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click()
+  current.ui.closeNodePanel()
+
+  current.emitGraph('selection:changed', [node])
+  openNodePanel()
+  expect(panel().querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Test Switch')
+  expect(panel().querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe('Node')
+})
+
+test('global settings show an empty state without a renderer', () => {
+  current = createHarness()
+  const panel = openNodePanel()!
+  panel.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click()
+  expect(panel.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Global settings')
+  expect(panel.querySelector('.bpgraph-node-panel-empty')?.textContent).toBe('No global settings')
+})
+
+test('tab keyboard navigation moves focus and selection', () => {
+  current = createHarness()
+  const panel = openNodePanel()!
+  const nodeTab = panel.querySelector<HTMLButtonElement>('[data-tab="node"]')!
+  const globalTab = panel.querySelector<HTMLButtonElement>('[data-tab="global"]')!
+  nodeTab.focus()
+  nodeTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+  expect(panel.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Global settings')
+  expect(document.activeElement).toBe(panel.querySelector('[data-tab="global"]'))
+  expect(globalTab.getAttribute('aria-selected')).toBe('true')
+
+  globalTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+  expect(document.activeElement).toBe(panel.querySelector('[data-tab="node"]'))
+  expect(panel.querySelector('[data-tab="node"]')?.getAttribute('aria-selected')).toBe('true')
+})
+
+test('overview and global settings renderers receive graph, language, and close', () => {
+  const seen: Array<Record<string, unknown>> = []
+  current = createHarness({
+    language: 'zh',
+    nodePanel: {
+      overview: (ctx) => {
+        seen.push({ view: 'overview', graph: ctx.graph, language: ctx.language, locateNode: ctx.locateNode })
+        return html`<div class="app-overview">Overview</div>`
+      },
+      globalSettings: (ctx) => {
+        seen.push({ view: 'global', graph: ctx.graph, language: ctx.language })
+        return html`<button class="app-close" @click=${() => ctx.close()}>Close</button>`
+      },
+    },
+  })
+  const overviewEntry = seen.find((entry) => entry.view === 'overview')!
+  expect(overviewEntry.graph).toBe(current.graph)
+  expect(overviewEntry.language).toBe('zh')
+  expect(typeof overviewEntry.locateNode).toBe('function')
+
+  seen.length = 0
+  current.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click()
+  const globalEntry = seen.find((entry) => entry.view === 'global')!
+  expect(globalEntry.graph).toBe(current.graph)
+  expect(globalEntry.language).toBe('zh')
+  expect(globalEntry.locateNode).toBeUndefined()
+
+  current.container.querySelector<HTMLButtonElement>('.app-close')!.click()
   expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+})
+
+test('panel visibility defaults to open and is controlled by the toolbar and Graph API', () => {
+  current = createHarness()
+  const toggle = () => current!.container.querySelector<HTMLButtonElement>('[data-action="node-panel"]')!
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(toggle().getAttribute('aria-label')).toBe('Hide node panel')
+  expect(toggle().getAttribute('aria-pressed')).toBe('true')
+  expect(current.ui.isNodePanelOpen()).toBe(true)
+
+  toggle().click()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(toggle().getAttribute('aria-label')).toBe('Show node panel')
+  expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  expect(current.ui.isNodePanelOpen()).toBe(false)
+
+  current.ui.openNodePanel()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(current.ui.isNodePanelOpen()).toBe(true)
+  current.ui.toggleNodePanel()
+  expect(current.ui.isNodePanelOpen()).toBe(false)
+})
+
+test('refreshNodePanel reevaluates content and closes without configuration', () => {
+  let label = 'First overview'
+  current = createHarness({
+    nodePanel: { open: true, overview: () => html`<p class="app-overview">${label}</p>` },
+  })
+  expect(current.container.querySelector('.app-overview')?.textContent).toBe('First overview')
+
+  label = 'Second overview'
+  current.ui.refreshNodePanel()
+  expect(current.container.querySelector('.app-overview')?.textContent).toBe('Second overview')
+
+  current.graph.options.nodePanel = false
+  current.ui.refreshToolbar()
+  current.ui.refreshNodePanel()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(current.container.querySelector('[data-action="node-panel"]')).toBeNull()
+  expect(current.ui.isNodePanelOpen()).toBe(false)
+})
+
+test('toolbar uses the side-panel icon for the node panel and a console icon for debug', () => {
+  current = createHarness({ debugPanel: true })
+  const nodePath = current.container
+    .querySelector('[data-action="node-panel"] svg path')?.getAttribute('d')
+  const debugPath = current.container
+    .querySelector('[data-action="debug-panel"] svg path')?.getAttribute('d')
+  expect(nodePath).toBeTruthy()
+  expect(debugPath).toBeTruthy()
+  expect(nodePath).not.toBe(debugPath)
+  // The debug toggle is a terminal window with a prompt and a line.
+  expect(debugPath).toContain('M7 9l3 3-3 3')
+  expect(debugPath).toContain('M13 15h4')
+})
+
+test('Esc keeps the persistent node panel open', () => {
+  current = createHarness()
+  openNodePanel()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(current.ui.isNodePanelOpen()).toBe(true)
+})
+
+test('nodePanel.open false starts the panel closed', () => {
+  current = createHarness({ nodePanel: { open: false } })
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(current.ui.isNodePanelOpen()).toBe(false)
+  expect(current.container.querySelector<HTMLButtonElement>('[data-action="node-panel"]')?.getAttribute('aria-label')).toBe('Show node panel')
+
+  current.ui.openNodePanel()
+  expect(current.container.querySelector('.bpgraph-node-panel')).toBeTruthy()
+  expect(current.ui.isNodePanelOpen()).toBe(true)
 })
 
 test('bottom zoom controls adjust or reset to 100%, preserve pan, and save viewport', () => {
@@ -1440,7 +1904,7 @@ test('zoom control clicks and wheel do not bubble; destroy removes subscriptions
 test('toolbar renders actions; without run emit toolbar:action', () => {
   current = createHarness({ toolbar: { actions: [{ id: 'run', label: 'Run' }] } })
   const buttons = current.container.querySelectorAll<HTMLButtonElement>('.bpgraph-toolbar-button')
-  expect([...buttons].map((button) => button.getAttribute('aria-label'))).toEqual(['Undo', 'Redo', 'Run'])
+  expect([...buttons].map((button) => button.getAttribute('aria-label'))).toEqual(['Undo', 'Redo', 'Run', 'Hide node panel'])
 
   const emit = vi.spyOn(current.graph, 'emit')
   buttons[2].dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1685,12 +2149,16 @@ test('toolbar icon buttons hide text but retain accessible names, tooltips, and 
     { id: 'stop', label: 'Stop', iconClass: 'ri-stop-line', disabled: true },
   ] } })
   const bar = current.container.querySelector('.bpgraph-toolbar')!
-  const buttons = [...bar.querySelectorAll<HTMLButtonElement>('button')].slice(2)
+  const allButtons = [...bar.querySelectorAll<HTMLButtonElement>('button')]
+  const buttons = allButtons.slice(2, 6)
+  expect(allButtons.map(button => button.getAttribute('aria-label'))).toEqual([
+    'Undo', 'Redo', 'Run', 'Debug', 'Resume', 'Stop', 'Hide node panel',
+  ])
   expect(buttons.map(button => button.textContent?.trim())).toEqual(['', '', '', ''])
   expect(bar.querySelector('[role="status"]')).toBeNull()
   expect(buttons.map(button => button.getAttribute('aria-label'))).toEqual(['Run', 'Debug', 'Resume', 'Stop'])
   expect(buttons.every(button => !button.hasAttribute('title'))).toBe(true)
-  const tooltips = [...bar.querySelectorAll<HTMLElement>('[role="tooltip"]')].slice(2)
+  const tooltips = [...bar.querySelectorAll<HTMLElement>('[role="tooltip"]')].slice(2, 6)
   expect(tooltips.map(tooltip => tooltip.textContent?.trim())).toEqual(['Run current workflow', 'Debug', 'Resume', 'Stop'])
   expect(buttons.map(button => button.getAttribute('aria-describedby'))).toEqual(tooltips.map(tooltip => tooltip.id))
   expect(tooltips.every(tooltip => getComputedStyle(tooltip).display === 'none')).toBe(true)
@@ -1701,6 +2169,10 @@ test('toolbar icon buttons hide text but retain accessible names, tooltips, and 
     expect(button.classList.contains('is-icon')).toBe(true)
     expect(button.querySelector('i')?.getAttribute('aria-hidden')).toBe('true')
   }
+  // The panel toggles use built-in SVG icons rather than icon-font classes.
+  const nodeToggle = allButtons.at(-1)!
+  expect(nodeToggle.querySelector('svg path')).toBeTruthy()
+  expect(nodeToggle.querySelector('i')).toBeNull()
   const emit = vi.spyOn(current.graph, 'emit')
   buttons[0].click()
   expect(emit).toHaveBeenCalledExactlyOnceWith('toolbar:action', 'run')
@@ -1728,15 +2200,22 @@ test('replay disables toolbar buttons except the debug panel toggle', () => {
   const allButtons = [...current.container.querySelectorAll<HTMLButtonElement>('.bpgraph-toolbar-button')]
   // Keep the debug panel toggle last in the toolbar.
   expect(allButtons.at(-1)).toBe(toggle)
+  const nodeToggle = current.container.querySelector<HTMLButtonElement>('[aria-label="Show node panel"]')!
+  expect(nodeToggle.disabled).toBe(true)
   const others = allButtons.filter((button) => button !== toggle)
   expect(others.map((button) => button.getAttribute('aria-label'))).toEqual(
-    expect.arrayContaining(['Undo', 'Redo', 'Run', 'Resume'])
+    expect.arrayContaining(['Undo', 'Redo', 'Run', 'Resume', 'Show node panel'])
   )
   expect(others.every((button) => button.disabled)).toBe(true)
 
   const emit = vi.spyOn(current.graph, 'emit')
   current.container.querySelector<HTMLButtonElement>('[aria-label="Run"]')!.click()
   expect(emit).not.toHaveBeenCalledWith('toolbar:action', 'run')
+
+  nodeToggle.click()
+  expect(current.ui.isNodePanelOpen()).toBe(false)
+  current.ui.openNodePanel()
+  expect(current.ui.isNodePanelOpen()).toBe(false)
 
   toggle.click()
   expect(current.ui.isDebugPanelOpen()).toBe(true)
@@ -1811,21 +2290,15 @@ function debugSample() {
       },
       { id: 'task-2', title: 'Listen message', status: 'running' as const, startedAt: 3000 },
     ],
-    chain: [
-      { nodeId: 'node-1', label: 'Start node', status: 'completed' as const },
-      { nodeId: 'node-2', label: 'Text Input', status: 'running' as const },
-    ],
     logs: [
-      { time: 1000, level: 'info' as const, message: 'Execution started' },
-      { time: 2000, level: 'error' as const, message: 'Node execution failed', nodeId: 'node-2' },
+      { time: 1000, level: 'info' as const, type: 'task:status', message: 'Execution started' },
+      { time: 2000, level: 'error' as const, type: 'activation:status', message: 'Node execution failed', nodeId: 'node-2' },
     ],
   }
 }
 
 const debugToggle = () =>
-  current!.container.querySelector<HTMLButtonElement>(
-    '[aria-label="Show debug panel"], [aria-label="Hide debug panel"]'
-  )!
+  current!.container.querySelector<HTMLButtonElement>('[data-action="debug-panel"]')!
 
 test('debug panel starts hidden; toolbar toggles visibility and aria state', () => {
   current = createHarness({ debugPanel: { width: 300, data: () => debugSample() } })
@@ -1847,9 +2320,9 @@ test('debug panel starts hidden; toolbar toggles visibility and aria state', () 
   expect(debugToggle().classList.contains('is-pressed')).toBe(true)
 
   const sections = [...panel.querySelectorAll<HTMLElement>('.bpgraph-debug-panel-section')]
-  expect(sections.map((section) => section.getAttribute('aria-label'))).toEqual(['Execution records', 'Execution chain', 'Logs'])
+  expect(sections.map((section) => section.getAttribute('aria-label'))).toEqual(['Execution records', 'Logs'])
   expect([...panel.querySelectorAll('.bpgraph-debug-panel-section-title')].map((title) => title.textContent?.replace(/\s+/g, '')))
-    .toEqual(['Executionrecords2', 'Executionchain2', 'Logs2'])
+    .toEqual(['Executionrecords2', 'Logs2'])
 
   const records = [...panel.querySelectorAll('.bpgraph-debug-record')]
   expect(records).toHaveLength(2)
@@ -1861,18 +2334,16 @@ test('debug panel starts hidden; toolbar toggles visibility and aria state', () 
   expect(records[0].querySelector('.bpgraph-debug-status')?.textContent?.trim()).toBe('Completed')
   expect(records[1].querySelector('.bpgraph-debug-status')?.textContent?.trim()).toBe('Running')
 
-  const chain = [...panel.querySelectorAll('.bpgraph-debug-chain-item')]
-  expect(chain.map((item) => item.querySelector('strong')?.textContent)).toEqual(['Start node', 'Text Input'])
-  expect(chain.map((item) => item.querySelector('.bpgraph-debug-status')?.textContent?.trim()))
-    .toEqual(['Completed', 'Running'])
-  expect(chain[0].querySelector('.bpgraph-debug-chain-index')?.textContent).toBe('1')
-  expect(chain[1].querySelector('.bpgraph-debug-chain-index')?.textContent).toBe('2')
-
   const logs = [...panel.querySelectorAll('.bpgraph-debug-log')]
-  expect(logs.map((log) => log.querySelector('.bpgraph-debug-log-level')?.textContent)).toEqual(['Info', 'Error'])
+  // Engine trace event types are shown as badges; the level label is the fallback.
+  expect(logs.map((log) => log.querySelector('.bpgraph-debug-log-type')?.textContent)).toEqual([
+    'task:status',
+    'activation:status',
+  ])
   expect(logs[0].textContent).toContain('Execution started')
   expect(logs[1].textContent).toContain('Node execution failed')
   expect(logs[1].querySelector('.bpgraph-debug-log-node')?.textContent).toBe('Text Input')
+  expect(logs[1].classList.contains('is-error')).toBe(true)
 
   panel.querySelector<HTMLButtonElement>('[aria-label="Close debug panel"]')!.click()
   expect(current.container.querySelector('.bpgraph-debug-panel')).toBeNull()
@@ -1880,20 +2351,31 @@ test('debug panel starts hidden; toolbar toggles visibility and aria state', () 
   expect(debugToggle().getAttribute('aria-pressed')).toBe('false')
 })
 
-test('execution chains indent subgraph roles and logs prefix [subgraph name]', () => {
+test('log entries without an engine event type fall back to the level label', () => {
+  current = createHarness({
+    debugPanel: {
+      width: 300,
+      data: () => ({
+        logs: [
+          { time: 1000, message: 'Application log' },
+          { time: 2000, level: 'warn' as const, message: 'Application warning' },
+        ],
+      }),
+    },
+  })
+  current.ui.openDebugPanel()
+
+  const types = [...current.container.querySelectorAll('.bpgraph-debug-log-type')]
+  expect(types.map((type) => type.textContent)).toEqual(['Info', 'Warning'])
+  expect(types[1].classList.contains('is-plain')).toBe(true)
+})
+
+test('subgraph log entries are indented and prefixed with [subgraph name]', () => {
   const scope = { subgraphId: 'child', title: 'Order subgraph', depth: 1 }
   current = createHarness({
     debugPanel: {
       width: 300,
       data: () => ({
-        chain: [
-          { nodeId: 'call', label: 'Call subgraph', status: 'completed' as const, kind: 'subgraph' as const },
-          {
-            nodeId: 'child-start', label: 'Subgraph entry', status: 'completed' as const,
-            kind: 'subgraph-start' as const, scope,
-          },
-          { nodeId: 'child-step', label: 'Internal node', status: 'running' as const, scope },
-        ],
         logs: [
           { time: 1000, message: 'Internal node completed', nodeId: 'child-step', scope },
         ],
@@ -1902,31 +2384,26 @@ test('execution chains indent subgraph roles and logs prefix [subgraph name]', (
   })
   current.ui.openDebugPanel()
 
-  const chain = [...current.container.querySelectorAll<HTMLElement>('.bpgraph-debug-chain-item')]
-  expect(chain.map((item) => item.style.paddingLeft)).toEqual(['0px', '14px', '14px'])
-  expect(chain[0].querySelector('.bpgraph-debug-chain-tag')?.textContent?.trim()).toBe('Subgraph')
-  expect(chain[1].querySelector('.bpgraph-debug-chain-tag')?.textContent?.trim()).toBe('Subgraph entry')
-  // Ordinary subgraph nodes use indentation without role labels.
-  expect(chain[2].querySelector('.bpgraph-debug-chain-tag')).toBeNull()
-
   const log = current.container.querySelector('.bpgraph-debug-log-scope')
   expect(log?.textContent).toBe('[Order subgraph]')
   expect(current.container.querySelector('.bpgraph-debug-log-message')?.textContent).toContain('Internal node completed')
+  // Subgraph entries are indented by their nesting depth.
+  expect(current.container.querySelector<HTMLElement>('.bpgraph-debug-log')?.style.paddingLeft).toBe('12px')
 })
 
-test('untitled execution chain entries resolve names across subgraphs instead of showing only node ID', () => {
+test('untitled log entries resolve names across subgraphs instead of showing only node ID', () => {
   current = createHarness({
     debugPanel: {
       width: 300,
       data: () => ({
-        chain: [{ nodeId: 'child-step', status: 'completed' as const }],
+        logs: [{ time: 1000, message: 'Internal node completed', nodeId: 'child-step' }],
       }),
     },
   })
   current.graph.findNodeAnywhere.mockReturnValue({ title: 'Subgraph internal node' } as never)
   current.ui.openDebugPanel()
 
-  expect(current.container.querySelector('.bpgraph-debug-chain-body strong')?.textContent).toBe('Subgraph internal node')
+  expect(current.container.querySelector('.bpgraph-debug-log-node')?.textContent).toBe('Subgraph internal node')
 })
 
 test('debug panels shift node panels left and restore their position on close', () => {
@@ -1936,6 +2413,7 @@ test('debug panels shift node panels left and restore their position on close', 
 
   current.ui.openDebugPanel()
   current.emitGraph('selection:changed', [node])
+  openNodePanel()
   const panel = current.container.querySelector<HTMLElement>('.bpgraph-node-panel')!
   expect(panel.style.right).toBe('316px')
   expect(panel.style.maxWidth).toBe('calc(100% - 324px)')
@@ -1946,13 +2424,80 @@ test('debug panels shift node panels left and restore their position on close', 
   expect(current.ui.isDebugPanelOpen()).toBe(false)
 })
 
+test('toolbar reserves the measured width of open side panels', () => {
+  current = createHarness({ debugPanel: true })
+  const inset = () =>
+    current!.container.querySelector<HTMLElement>('.bpgraph-toolbar-layer')!
+      .style.getPropertyValue('--bpgraph-toolbar-inset')
+  // The node panel starts open by default.
+  expect(inset()).toBe('328px')
+  current.ui.closeNodePanel()
+  expect(inset()).toBe('0px')
+  current.ui.openDebugPanel()
+  expect(inset()).toBe('348px')
+  current.ui.openNodePanel()
+  expect(inset()).toBe('676px')
+  current.ui.closeDebugPanel()
+  expect(inset()).toBe('328px')
+})
+
+test('compact canvases dock one panel below the toolbar and collapse back', () => {
+  let resize: (() => void) | null = null
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: () => void) {
+      resize = callback
+    }
+    observe() {}
+    disconnect() {}
+  })
+  current = createHarness({ debugPanel: true }, 700)
+  const container = current.container
+  const node = container.querySelector<HTMLElement>('.bpgraph-node-panel')!
+  expect(container.getAttribute('data-bpgraph-compact')).toBe('true')
+  expect(node.classList.contains('is-compact')).toBe(true)
+  expect(node.style.left).toBe('8px')
+  expect(node.style.right).toBe('8px')
+  expect(node.style.width).toBe('auto')
+  expect(node.style.maxWidth).toBe('none')
+  expect(container.querySelector<HTMLElement>('.bpgraph-toolbar-layer')!
+    .style.getPropertyValue('--bpgraph-toolbar-inset')).toBe('0px')
+
+  // The compact sheets are mutually exclusive.
+  current.ui.openDebugPanel()
+  expect(container.querySelector('.bpgraph-node-panel')).toBeNull()
+  const debug = container.querySelector<HTMLElement>('.bpgraph-debug-panel')!
+  expect(debug.classList.contains('is-compact')).toBe(true)
+  expect(debug.style.width).toBe('auto')
+  expect(debug.style.left).toBe('8px')
+  current.ui.openNodePanel()
+  expect(container.querySelector('.bpgraph-debug-panel')).toBeNull()
+  expect(container.querySelector('.bpgraph-node-panel')?.classList.contains('is-compact')).toBe(true)
+
+  current.setLayoutWidth(900)
+  resize?.()
+  expect(container.hasAttribute('data-bpgraph-compact')).toBe(false)
+  expect(container.querySelector('.bpgraph-node-panel')?.classList.contains('is-compact')).toBe(false)
+  expect(container.querySelector<HTMLElement>('.bpgraph-toolbar-layer')!
+    .style.getPropertyValue('--bpgraph-toolbar-inset')).toBe('328px')
+
+  // Both panels coexist while wide; shrinking into compact mode closes the secondary debug sheet.
+  current.ui.openDebugPanel()
+  expect(container.querySelector('.bpgraph-debug-panel')).not.toBeNull()
+  expect(container.querySelector<HTMLElement>('.bpgraph-toolbar-layer')!
+    .style.getPropertyValue('--bpgraph-toolbar-inset')).toBe('676px')
+  current.setLayoutWidth(700)
+  resize?.()
+  expect(container.getAttribute('data-bpgraph-compact')).toBe('true')
+  expect(container.querySelector('.bpgraph-debug-panel')).toBeNull()
+  expect(container.querySelector('.bpgraph-node-panel')?.classList.contains('is-compact')).toBe(true)
+})
+
 test('Esc closing debug panels preserves subgraph location; empty data shows placeholders', () => {
   current = createHarness({ debugPanel: {} })
   current.graph.model.subgraphStack.push({ id: 'child' })
   current.ui.openDebugPanel()
   const panel = current.container.querySelector('.bpgraph-debug-panel')!
   expect(panel.textContent).toContain('No execution records')
-  expect(panel.textContent).toContain('No execution chain')
   expect(panel.textContent).toContain('No logs')
 
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
@@ -1966,7 +2511,6 @@ test('Esc closing debug panels preserves subgraph location; empty data shows pla
 test('refresh reevaluates debug data and renders plain text', () => {
   let data = {
     records: [{ id: 'task-1', title: 'First execution', status: 'running' as const, startedAt: 1000 }],
-    chain: [{ nodeId: 'node-1', label: 'Node one', status: 'running' as const }],
     logs: [{ time: 1000, message: 'First log' }],
   }
   current = createHarness({ debugPanel: { data: () => data } })
@@ -1975,13 +2519,11 @@ test('refresh reevaluates debug data and renders plain text', () => {
 
   data = {
     records: [{ id: 'task-2', title: '<img src=x onerror=alert(1)>', status: 'failed' as const, startedAt: 2000 }],
-    chain: [{ nodeId: 'node-2', label: '<b>Node two</b>', status: 'completed' as const }],
     logs: [{ time: 2000, level: 'error' as const, message: '<img src=x onerror=alert(1)>' }],
   }
   current.ui.refreshDebugPanel()
   const panel = current.container.querySelector<HTMLElement>('.bpgraph-debug-panel')!
   expect(panel.textContent).toContain('<img src=x onerror=alert(1)>')
-  expect(panel.textContent).toContain('<b>Node two</b>')
   expect(panel.querySelector('img')).toBeNull()
   expect(panel.querySelector('b')).toBeNull()
   expect(panel.querySelector('.bpgraph-debug-record')?.classList.contains('is-failed')).toBe(true)
@@ -1992,24 +2534,34 @@ test('refresh reevaluates debug data and renders plain text', () => {
   expect(current.container.querySelector('[aria-label="Show debug panel"]')).toBeNull()
 })
 
-test('debug panels provide toggles without toolbar actions unless toolbar=false or debugPanel=false', () => {
+test('panel toggles render only for enabled panels and disappear with the toolbar', () => {
   current = createHarness({ debugPanel: true })
   expect(current.container.querySelector('.bpgraph-toolbar')).toBeTruthy()
   expect(debugToggle()).toBeTruthy()
+  expect(current.container.querySelector('[data-action="node-panel"]')).toBeTruthy()
   current.ui.destroy()
   current = null
 
   current = createHarness({ debugPanel: true, toolbar: false })
   expect(current.container.querySelector('.bpgraph-toolbar')).toBeNull()
   expect(current.container.querySelector('[aria-label="Show debug panel"]')).toBeNull()
+  expect(current.container.querySelector('[data-action="node-panel"]')).toBeNull()
   current.ui.destroy()
   current = null
 
   current = createHarness({ debugPanel: false })
-  expect(current.container.querySelector('.bpgraph-toolbar')).toBeNull()
+  // The node panel keeps the default-enabled toolbar alive; only the debug toggle disappears.
+  expect(current.container.querySelector('.bpgraph-toolbar')).toBeTruthy()
+  expect(current.container.querySelector('[aria-label="Show debug panel"]')).toBeNull()
+  expect(current.container.querySelector('[data-action="node-panel"]')).toBeTruthy()
   current.ui.openDebugPanel()
   expect(current.ui.isDebugPanelOpen()).toBe(false)
   expect(current.container.querySelector('.bpgraph-debug-panel')).toBeNull()
+  current.ui.destroy()
+  current = null
+
+  current = createHarness({ debugPanel: false, nodePanel: false })
+  expect(current.container.querySelector('.bpgraph-toolbar')).toBeNull()
 })
 
 test('failed debug data reads leave panels usable with empty states', () => {
@@ -2045,7 +2597,7 @@ test('finished records can be replayed; clicking the selected record again exits
   const onRecordSelect = vi.fn()
   current = createHarness({
     debugPanel: {
-      data: () => ({ records, logs: [], chain: [] }),
+      data: () => ({ records, logs: [] }),
       activeRecordId: 'task-1',
       onRecordSelect,
     },
@@ -2081,7 +2633,6 @@ test('node hover does not insert node data into debug panels', () => {
   const data = vi.fn(() => ({
     records: [],
     logs: [{ time: 1_700_000_000_000, message: 'Execution completed' }],
-    chain: [],
   }))
   current = createHarness({ debugPanel: { data } })
   current.ui.openDebugPanel()
@@ -2102,7 +2653,7 @@ test('node hover does not insert node data into debug panels', () => {
 })
 
 test('replay displays a banner and restores editing interactions without inserting panel node data', () => {
-  current = createHarness({ debugPanel: { data: () => ({ records: [], logs: [], chain: [] }) } })
+  current = createHarness({ debugPanel: { data: () => ({ records: [], logs: [] }) } })
   current.ui.openDebugPanel()
   expect(current.container.querySelector('[aria-label="Node data"]')).toBeNull()
 
@@ -2138,13 +2689,13 @@ test('replay displays a banner and restores editing interactions without inserti
   expect(current.paper.options.interactive).toBe(true)
 })
 
-test('Esc exits replay and selecting nodes does not open panels', () => {
+test('Esc exits replay and selecting nodes keeps the overview', () => {
   current = createHarness()
   const node = createNodeStub()
   current.adapter.findNode.mockReturnValue(node)
   current.graph.isReplayMode.mockReturnValue(true)
   current.emitGraph('selection:changed', [node])
-  expect(current.container.querySelector('.bpgraph-node-panel')).toBeNull()
+  expect(current.container.querySelector('.bpgraph-node-panel-title')?.textContent).toBe('Graph overview')
 
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   expect(current.graph.exitReplay).toHaveBeenCalledOnce()
@@ -2224,7 +2775,7 @@ test('language refresh updates open menus, debug status labels, and execution pr
   current.ui.refreshLanguage()
   expect(current.container.querySelector('.bpgraph-context')?.textContent).toContain('添加节点')
   expect(current.container.querySelector('.bpgraph-debug-status')?.textContent?.trim()).toBe('已完成')
-  expect(current.container.querySelector('.bpgraph-debug-log-level')?.textContent).toBe('错误')
+  expect(current.container.querySelector('.bpgraph-debug-log-type')?.textContent).toBe('错误')
   expect(current.container.querySelector('.bpgraph-node-preview')?.textContent).toContain('输入')
   expect(current.container.querySelector('.bpgraph-node-preview')?.textContent).toContain('已完成')
   expect(current.container.querySelector('.bpgraph-debug-panel')?.textContent).toContain('Application record')
@@ -2237,4 +2788,48 @@ test('breakpoint SVG labels follow the supplied language while node titles remai
   expect(group.querySelector('[aria-label="断点"]')).toBeTruthy()
   expect(group.querySelector('title')?.textContent).toContain('调试时在执行前暂停')
   expect(group.querySelector('text')?.textContent).toBe('Custom title')
+})
+
+test('hovering a port shows its label and type; leaving the canvas hides the card', () => {
+  current = createHarness()
+  const port = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  port.setAttribute('class', 'bpgraph-port')
+  const body = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+  body.setAttribute('class', 'bpgraph-port-body')
+  body.setAttribute('data-port-name', 'duration')
+  body.setAttribute('data-port-label', 'Milliseconds')
+  body.setAttribute('data-port-type', 'number')
+  body.setAttribute('data-port-direction', 'in')
+  body.getBoundingClientRect = () => new DOMRect(120, 80, 12, 12)
+  port.appendChild(body)
+  current.container.appendChild(port)
+
+  vi.useFakeTimers()
+  body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  expect(current.container.querySelector('.bpgraph-port-tooltip')).toBeNull()
+  vi.advanceTimersByTime(500)
+  const card = current.container.querySelector<HTMLElement>('.bpgraph-port-tooltip')!
+  expect(card.getAttribute('role')).toBe('tooltip')
+  expect(card.querySelector('.bpgraph-port-tooltip-name')?.textContent).toBe('Milliseconds')
+  expect(card.querySelector('.bpgraph-port-tooltip-type')?.textContent).toBe('number')
+  expect(body.getAttribute('aria-describedby')).toBe(card.id)
+
+  body.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+  expect(current.container.querySelector('.bpgraph-port-tooltip')).toBeNull()
+})
+
+test('pressing on the canvas hides the port tooltip before a drag starts', () => {
+  current = createHarness()
+  const body = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+  body.setAttribute('class', 'bpgraph-port-body')
+  body.setAttribute('data-port-name', 'duration')
+  body.setAttribute('data-port-type', 'number')
+  current.container.appendChild(body)
+
+  vi.useFakeTimers()
+  body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  vi.advanceTimersByTime(500)
+  expect(current.container.querySelector('.bpgraph-port-tooltip')).toBeTruthy()
+  current.container.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+  expect(current.container.querySelector('.bpgraph-port-tooltip')).toBeNull()
 })

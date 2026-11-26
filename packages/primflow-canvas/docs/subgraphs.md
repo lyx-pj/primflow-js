@@ -8,9 +8,9 @@ The canvas distinguishes embedded subgraphs from external references and handles
 
 | Node state | Canvas behavior |
 | --- | --- |
-| A `subgraph` node has no `subgraphId` | Generate an id and create an embedded region |
-| A `subgraphId` matches a region in the current graph | Treat as an embedded subgraph; double-click to edit |
-| A `subgraphId` has no matching region in the current graph | Treat as an external reference. No empty region is created and `enterSubgraph()` does not enter it. The application opens, saves, and injects its content for execution |
+| A `subgraph` node has no `targetGraphId` | Generate an id and create an embedded region |
+| A `targetGraphId` matches a region in the current graph | Treat as an embedded subgraph; double-click to edit |
+| A `targetGraphId` has no matching region in the current graph | Treat as an external reference. No empty region is created and `enterSubgraph()` does not enter it. The application opens, saves, and injects its content for execution |
 
 When creating an embedded subgraph, the canvas generates a `Start` with parameter ports and an `End` with a `result` data port. Their IDs are `start-<subgraphId>` and `end-<subgraphId>`. External references save only the id; the application manages files.
 
@@ -42,10 +42,11 @@ The application saves edits, handles asynchronous switching failures, and refres
 
 ## Container node panels
 
-On the first single click of a container node, whether an embedded subgraph or external reference, the node panel waits about 200ms before opening. A double-click immediately cancels the pending opening and closes any existing panel without waiting for external subgraph loading. This avoids panel flashes before view changes. If the panel is already open, selecting another node, including a container, updates its data immediately without waiting.
+The toolbar button controls the node panel, which starts open, and selecting a container node, whether an embedded subgraph or external reference, does not open it automatically. If the panel is already open, selecting a container shows its settings. Double-clicking into a subgraph or loop body keeps the panel open and returns it to the graph overview until a node is selected in the new view. External subgraph loading does not control the panel, so a failed asynchronous switch leaves the current content in place.
 
 ## Tests
 
 - [startNodes.test.ts](../tests/startNodes.test.ts): embedded creation, Start port preservation, saving and loading.
 - [viewport.test.ts](../tests/viewport.test.ts), [ui.test.ts](../tests/ui.test.ts): back navigation, menus, and panel interactions.
 - [replay.test.ts](../tests/replay.test.ts): disabled navigation during replay and editing graph restoration on exit.
+- [previewCache.test.ts](../tests/previewCache.test.ts), [subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts), [regionSchematic.test.ts](../tests/regionSchematic.test.ts): cache keys, persisted payload validation, embedded first-frame schematics, instant cache mounts, and background revalidation.

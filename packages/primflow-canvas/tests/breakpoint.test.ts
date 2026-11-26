@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 import { expect, test, vi } from 'vitest'
-import { Node, NodeInstance } from '@lyx-pj/primflow-model'
+import { defineNode, NodeInstance, NodeRegistry } from '@lyx-pj/primflow-model'
 import type { Graph } from '../src/Graph'
 import { deserializeNodes, serializeNodes } from '../src/utils/serializer'
 
-class DebugNode extends Node {
-  static readonly type = 'debug-node'
-  static definition = { inputs: [], outputs: [] }
-}
+const DebugNode = defineNode({
+  definition: { inputs: [], outputs: [] },
+})
 
 test('breakpoints survive serialization and are absent by default in older graphs', () => {
+  const nodeRegistry = new NodeRegistry().register('debug-node', DebugNode)
   const node = new NodeInstance(DebugNode, { id: 'node-1', breakpoint: true })
   const json = serializeNodes([node])
   expect(json[0].breakpoint).toBe(true)
   const graph = {
+    nodeRegistry,
     createNodeInstance: (_type: string, options: ConstructorParameters<typeof NodeInstance>[1]) =>
       new NodeInstance(DebugNode, options),
   } as unknown as Graph

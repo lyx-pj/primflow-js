@@ -1,4 +1,4 @@
-import type { NodeInstanceType, LinkInstanceType } from './Graph'
+import type { NodeInstanceType, LinkInstanceType, LinkEnds } from './Graph'
 import { Graph } from './Graph'
 import { ChangedEvent } from '@lyx-pj/primflow-model'
 
@@ -93,6 +93,28 @@ export class PropertyChangeCommand implements Command {
   }
 }
 
+export class LinkEndsCommand implements Command {
+  private graph: Graph
+  private link: LinkInstanceType
+  private before: LinkEnds
+  private after: LinkEnds
+
+  constructor(graph: Graph, link: LinkInstanceType, before: LinkEnds, after: LinkEnds) {
+    this.graph = graph
+    this.link = link
+    this.before = before
+    this.after = after
+  }
+
+  undo() {
+    this.graph.applyLinkEnds(this.link, this.before)
+  }
+
+  redo() {
+    this.graph.applyLinkEnds(this.link, this.after)
+  }
+}
+
 export class UndoManager {
   public undoStack: Command[] = []
   public redoStack: Command[] = []
@@ -116,6 +138,11 @@ export class UndoManager {
     if (this.transactionStack.length > 0) {
       this.transactionStack[this.transactionStack.length - 1].push(command)
     }
+  }
+
+  /** Record an endpoint reconnection as one undoable command. */
+  public recordLinkEnds(link: LinkInstanceType, before: LinkEnds, after: LinkEnds) {
+    this.record(new LinkEndsCommand(this.graph, link, before, after))
   }
 
   /**

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import './svg-shim'
 import { expect, test, vi } from 'vitest'
-import { Node, NodeRegistry, type JsonGraph } from '@lyx-pj/primflow-model'
+import { defineNode, NodeRegistry, type JsonGraph } from '@lyx-pj/primflow-model'
 import { Graph, type LinkInstanceType, type NodeInstanceType } from '../src/Graph'
 
 // Replace rendering only; use real Graph, models, and JSON serialization to validate replay restoration.
@@ -45,31 +45,31 @@ vi.mock('../src/adapters/GraphAdapter', () => ({
   },
 }))
 
-class Step extends Node {
-  static definition = {
+const Step = defineNode({
+  definition: {
     inputs: [{ name: 'exec', type: 'exec' }] as const,
     outputs: [{ name: 'done', type: 'exec' }] as const,
-  }
-}
+  },
+})
 
 function replayGraph(): JsonGraph {
   return {
     nodes: [
       {
         id: 'replay-start',
-        nodeType: 'start',
-        type: 'start',
+        definitionId: 'start',
+        kind: 'start',
         position: { x: 0, y: 0 },
-        values: {},
+        inputValues: {},
         inputs: [],
         outputs: [{ name: 'start', type: 'exec', id: 'out-exec' }],
       },
       {
         id: 'replay-step',
-        nodeType: 'step',
-        type: 'default',
+        definitionId: 'step',
+        kind: 'default',
         position: { x: 120, y: 80 },
-        values: {},
+        inputValues: {},
         inputs: [{ name: 'exec', type: 'exec', id: 'in-exec' }],
         outputs: [{ name: 'done', type: 'exec', id: 'out-exec' }],
       },
