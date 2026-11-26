@@ -188,3 +188,5 @@ pnpm --filter primflow-react-example build
 ```
 
 单元和模块集成测试可用 `pnpm --filter primflow-react-example exec vitest run tests/autosave.test.ts`，按功能替换测试文件。
+
+浏览器回归和端到端用例位于 `e2e/`。首次执行 `pnpm exec playwright install chromium`，然后在仓库根目录运行 `pnpm test:e2e`。Playwright 自动启动和关闭本地示例服务。运行单个文件可用 `pnpm test:e2e workflow.e2e.ts`。失败用例的追踪记录保存在 `test-results/`。

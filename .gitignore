@@ -17,6 +17,10 @@ dist-ssr/
 build/
 *.tsbuildinfo
 
+# Playwright 测试产物
+/test-results/
+/playwright-report/
+
 *.local
 
 # Editor directories and files

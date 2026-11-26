@@ -99,9 +99,13 @@ See [Architecture](docs/architecture.md) for module responsibilities, terminolog
 | `pnpm build`                        | Build all libraries and check package boundaries                                           |
 | `pnpm build:all`                    | Build the entire workspace, including the example                                          |
 | `pnpm typecheck`                    | Check TypeScript types throughout the repository                                           |
-| `pnpm lint` / `pnpm test`           | Lint code / run tests                                                                      |
+| `pnpm lint`                        | Lint code                                                                                  |
+| `pnpm test`                        | Run release, workspace, and Playwright tests                                               |
+| `pnpm test:e2e`                    | Run browser regression and end-to-end tests in Playwright                                  |
 | `pnpm format` / `pnpm format:check` | Format files / check formatting                                                            |
 | `pnpm clean`                        | Remove build output                                                                        |
+
+Before running browser tests for the first time, run `pnpm exec playwright install chromium`. Playwright starts the React example and launches an isolated Chromium context for each test. See the [React example test instructions](examples/primflow-react/README.md#validation).
 
 ## License
 

@@ -188,3 +188,5 @@ pnpm --filter primflow-react-example build
 ```
 
 For unit and module integration tests, use `pnpm --filter primflow-react-example exec vitest run tests/autosave.test.ts` and substitute the relevant test file.
+
+Browser regression and end-to-end tests live in `e2e/`. Run `pnpm exec playwright install chromium` once, then use `pnpm test:e2e` from the repository root. Playwright starts and stops the local example server. To run a single file, use `pnpm test:e2e workflow.e2e.ts`. Failed runs keep their traces in `test-results/`.

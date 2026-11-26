@@ -99,9 +99,13 @@ pnpm dev
 | `pnpm build`                        | 构建所有库，并检查包之间的依赖       |
 | `pnpm build:all`                    | 构建全部工作区，包括示例             |
 | `pnpm typecheck`                    | 检查全仓库的 TypeScript 类型         |
-| `pnpm lint` / `pnpm test`           | 检查代码 / 运行测试                  |
+| `pnpm lint`                        | 检查代码                             |
+| `pnpm test`                        | 运行发布脚本、各包和 Playwright 测试  |
+| `pnpm test:e2e`                    | 用 Playwright 运行浏览器回归和端到端测试 |
 | `pnpm format` / `pnpm format:check` | 格式化 / 检查格式                    |
 | `pnpm clean`                        | 删除构建产物                         |
+
+首次运行浏览器测试前，执行 `pnpm exec playwright install chromium`。Playwright 会启动 React 示例，并为每个用例创建独立的 Chromium 浏览器上下文。详见 [React 示例验证说明](examples/primflow-react/README.zh-CN.md#验证)。
 
 ## 许可
 
