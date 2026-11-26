@@ -1,5 +1,13 @@
 # @lyx-pj/primflow-engine
 
+## 2.0.1
+
+### Patch Changes
+
+- a92bd5d: Include the source repository and package directory in npm metadata so consumers can trace each package to its source and verify its build provenance.
+- Updated dependencies [a92bd5d]
+  - @lyx-pj/primflow-model@2.0.1
+
 ## 2.0.0
 
 ### Major Changes

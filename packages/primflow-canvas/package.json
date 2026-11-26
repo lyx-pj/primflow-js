@@ -1,6 +1,6 @@
 {
   "name": "@lyx-pj/primflow-canvas",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": false,
   "description": "JointJS and lit-html canvas for editing and displaying Primflow graphs and execution results.",
   "type": "module",
