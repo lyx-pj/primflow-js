@@ -15,6 +15,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyx-pj/primflow-js.git",
+    "directory": "packages/primflow-canvas"
+  },
   "exports": {
     ".": {
       "@lyx-pj/source": "./src/index.ts",

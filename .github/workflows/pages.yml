@@ -1,9 +1,15 @@
 name: 部署示例到 GitHub Pages
-run-name: 部署 ${{ inputs.release_tag || github.ref_name }} 到 GitHub Pages
+run-name: 部署 ${{ inputs.release_tag }} 到 GitHub Pages
 
 on:
-  push:
-    tags: ['v*']
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      release_sha:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       release_tag:
@@ -23,15 +29,14 @@ concurrency:
 jobs:
   build:
     if: >-
-      (github.event_name == 'push' && github.ref_type == 'tag' && github.event.deleted != true) ||
+      (github.event_name == 'push' && inputs.release_sha != '') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_tag != '')
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v7
         with:
-          # 手动部署使用当前工作流，从已发布的 tag 构建站点内容。
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
+          ref: ${{ inputs.release_sha || format('refs/tags/{0}', inputs.release_tag) }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
@@ -46,7 +51,16 @@ jobs:
       - name: 校验发布 tag 与版本快照
         run: pnpm exec tsx scripts/validate-release.ts
         env:
-          RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_REF: ${{ inputs.release_tag }}
+
+      - name: 确认 npm 已发布此版本
+        run: |
+          pnpm -r --filter './packages/*' --fail-if-no-match exec sh -ec '
+            published=$(npm view "$PNPM_PACKAGE_NAME@${RELEASE_REF#v}" version --registry https://registry.npmjs.org/)
+            test "$published" = "${RELEASE_REF#v}"
+          '
+        env:
+          RELEASE_REF: ${{ inputs.release_tag }}
 
       - name: 构建库并验证包边界
         run: pnpm build

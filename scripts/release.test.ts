@@ -12,7 +12,6 @@ vi.mock('node:child_process', () => ({ execFileSync }))
 const actualChild = await vi.importActual<typeof import('node:child_process')>('node:child_process')
 const repository = resolve(import.meta.dirname, '..')
 const originalExitCode = process.exitCode
-const publish = 'pnpm publish -r --access public --registry https://registry.npmjs.org/'
 const commit = 'git commit -m chore(release): v0.0.7'
 const tag = 'v0.0.7'
 const ref = `refs/tags/${tag}`
@@ -30,7 +29,7 @@ let state: {
   extraPaths: string[]
   fail: string
   onBuild?: () => void
-  onPublish?: () => void
+  onCreateTag?: () => void
 }
 const writeJson = (path: string, data: unknown) => writeFileSync(join(root, path), JSON.stringify(data, null, 2))
 const readJson = (path: string) => JSON.parse(readFileSync(join(root, path), 'utf8'))
@@ -95,8 +94,8 @@ beforeEach(() => {
     if (key === createTag) {
       state.refs[ref] = 'tag-object'
       state.refs[`${ref}^{commit}`] = state.head
+      state.onCreateTag?.()
     }
-    if (key === publish) state.onPublish?.()
     return ''
   })
 })
@@ -118,7 +117,7 @@ function prepareRetry() {
 }
 
 describe('发布流程', () => {
-  it('构建后提交并创建附注 tag，npm 成功后只原子推送 main 和本次 tag', () => {
+  it('构建后提交并创建附注 tag，只原子推送 main 和本次 tag，由 Actions 发布 npm 包', () => {
     release(root)
     expect(process.exitCode).toBeUndefined()
     expect(readJson('package.json').version).toBe('0.0.7')
@@ -127,16 +126,17 @@ describe('发布流程', () => {
     expect(commands()).not.toContain('pnpm sync-versions')
     expect(commands().indexOf('pnpm build')).toBeLessThan(commands().indexOf(commit))
     expect(commands().indexOf(commit)).toBeLessThan(commands().indexOf(createTag))
-    expect(commands().indexOf(createTag)).toBeLessThan(commands().indexOf(publish))
+    expect(commands().indexOf(createTag)).toBeLessThan(commands().indexOf(push))
+    expect(commands().some((cmd) => /^(pnpm|npm) .*\bpublish\b/.test(cmd))).toBe(false)
     expect(commands().at(-1)).toBe(push)
+    expect(console.log).toHaveBeenCalledWith(`已推送 ${tag}，请在 GitHub Actions 查看 npm 发布和 Pages 部署状态。`)
     expect(execFileSync.mock.calls.every(([, , options]) => options.cwd === root)).toBe(true)
   })
 
-  it('没有版本变化时不提交、不发布、不推送', () => {
+  it('没有版本变化时不提交或推送', () => {
     state.bump = false
     release(root)
     expect(process.exitCode).toBeUndefined()
-    expect(commands()).not.toContain(publish)
     expect(commands().some((cmd) => cmd.startsWith('git push') || cmd.startsWith('git commit'))).toBe(false)
   })
 
@@ -159,7 +159,7 @@ describe('发布流程', () => {
     else state.remote = 'other'
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(commands()).not.toContain(publish)
+    expect(commands()).not.toContain(push)
     expect(commands()).not.toContain(commit)
   })
 
@@ -171,7 +171,7 @@ describe('发布流程', () => {
     })
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(commands()).not.toContain(publish)
+    expect(commands()).not.toContain(push)
   })
 
   it.each([
@@ -185,14 +185,13 @@ describe('发布流程', () => {
     'pnpm build',
     commit,
     createTag,
-    publish,
     push,
   ])('%s 失败后不执行后续命令', (failed) => {
     state.fail = failed
     release(root)
     expect(commands().at(-1)).toBe(failed)
     expect(process.exitCode).toBe(1)
-    expect(console.log).not.toHaveBeenCalledWith('✅ 发布完成')
+    expect(console.log).not.toHaveBeenCalled()
   })
 
   it('构建引入无关文件时不暂存或提交', () => {
@@ -203,7 +202,6 @@ describe('发布流程', () => {
     release(root)
     expect(process.exitCode).toBe(1)
     expect(commands().some((cmd) => cmd.startsWith('git add'))).toBe(false)
-    expect(commands()).not.toContain(publish)
   })
 
   it('构建修改已生成的文件时也停止', () => {
@@ -223,7 +221,7 @@ describe('发布流程', () => {
     })
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(commands()).not.toContain(publish)
+    expect(commands()).not.toContain(push)
   })
 
   it('库包版本不一致时停止', () => {
@@ -231,7 +229,6 @@ describe('发布流程', () => {
     release(root)
     expect(process.exitCode).toBe(1)
     expect(commands()).not.toContain('pnpm changeset version')
-    expect(commands()).not.toContain(publish)
   })
 
   it('升版后库版本不一致时停止，不用根版本覆盖结果', () => {
@@ -247,7 +244,6 @@ describe('发布流程', () => {
     expect(process.exitCode).toBe(1)
     expect(readJson('package.json').version).toBe('0.0.6')
     expect(commands()).not.toContain(commit)
-    expect(commands()).not.toContain(publish)
   })
 
   it('暂存区夹带额外文件时不提交', () => {
@@ -259,31 +255,13 @@ describe('发布流程', () => {
     release(root)
     expect(process.exitCode).toBe(1)
     expect(commands()).not.toContain(commit)
-    expect(commands()).not.toContain(publish)
-  })
-
-  it('npm 失败后重跑复用同一快照，不再次升版或提交', () => {
-    state.fail = publish
-    release(root)
-    expect(process.exitCode).toBe(1)
-    expect(state.refs[`${ref}^{commit}`]).toBe('released')
-    expect(commands().some((cmd) => cmd.startsWith('git push'))).toBe(false)
-    state.fail = ''
-    process.exitCode = undefined
-    execFileSync.mockClear()
-    release(root)
-    expect(process.exitCode).toBeUndefined()
-    expect(commands()).not.toContain('pnpm changeset version')
-    expect(commands()).not.toContain(commit)
-    expect(commands()).not.toContain(createTag)
-    expect(commands()).toContain(publish)
-    expect(commands().at(-1)).toContain('git push --atomic')
   })
 
   it('推送失败后重跑复用同一快照', () => {
     state.fail = push
     release(root)
     expect(process.exitCode).toBe(1)
+    expect(state.refs[`${ref}^{commit}`]).toBe('released')
     state.fail = ''
     process.exitCode = undefined
     execFileSync.mockClear()
@@ -291,6 +269,8 @@ describe('发布流程', () => {
     expect(process.exitCode).toBeUndefined()
     expect(commands()).not.toContain(commit)
     expect(commands()).not.toContain('pnpm changeset version')
+    expect(commands()).not.toContain(createTag)
+    expect(commands().at(-1)).toBe(push)
   })
 
   it('重试时复用已经推送的同一个附注 tag', () => {
@@ -308,14 +288,14 @@ describe('发布流程', () => {
     state.refs[`${ref}^{commit}`] = 'other'
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(commands()).not.toContain(publish)
+    expect(commands()).not.toContain(push)
   })
 
   it('提交成功但创建 tag 失败后，重跑补建 tag 并复用提交', () => {
     state.fail = createTag
     release(root)
     expect(process.exitCode).toBe(1)
-    expect(commands()).not.toContain(publish)
+    expect(commands()).not.toContain(push)
     state.fail = ''
     process.exitCode = undefined
     execFileSync.mockClear()
@@ -327,18 +307,9 @@ describe('发布流程', () => {
     expect(commands().at(-1)).toBe(push)
   })
 
-  it('npm 发布期间快照改变时停止推送', () => {
-    state.onPublish = () => {
+  it('创建 tag 时 HEAD 改变则停止推送', () => {
+    state.onCreateTag = () => {
       state.head = 'unexpected'
-    }
-    release(root)
-    expect(process.exitCode).toBe(1)
-    expect(commands().some((cmd) => cmd.startsWith('git push'))).toBe(false)
-  })
-
-  it('npm 发布期间同名 tag 被替换时停止推送', () => {
-    state.onPublish = () => {
-      state.refs[ref] = 'replacement-tag-object'
     }
     release(root)
     expect(process.exitCode).toBe(1)
@@ -346,7 +317,7 @@ describe('发布流程', () => {
   })
 })
 
-describe('Pages 发布快照', () => {
+describe('GitHub Actions 发布快照', () => {
   it('允许匹配的 tag、提交和统一版本', () => {
     prepareRetry()
     expect(validateReleaseSnapshot(root, tag, state.subject)).toBe('0.0.7')
@@ -369,23 +340,97 @@ describe('Pages 发布快照', () => {
     for (const name of releasePackages) writeJson(`packages/${name}/package.json`, { version: '0.0.7-beta.1' })
     expect(() => readReleaseVersion(root)).toThrow('稳定版本')
   })
-  it('workflow 自动部署版本 tag 并校验该提交的快照', () => {
-    const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
+  it('release workflow 仅在创建版本 tag 时校验并发布该提交，再部署 Pages', () => {
+    const workflow = readFileSync(join(repository, '.github/workflows/release.yml'), 'utf8')
     expect(workflow).toContain("tags: ['v*']")
     expect(workflow).not.toMatch(/^\s+branches:/m)
     expect(workflow).toContain("github.ref_type == 'tag'")
-    expect(workflow).toContain("github.event.deleted != true")
-    expect(workflow).toContain('|| github.sha }}')
-    expect(workflow).toContain('pnpm exec tsx scripts/validate-release.ts')
+    expect(workflow).toContain('github.event.created == true')
+    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).toContain('git merge-base --is-ancestor HEAD refs/remotes/origin/main')
+    expect(workflow).toContain('RELEASE_REF: ${{ github.ref_name }}')
+    expect(workflow).toContain('id-token: write')
+    expect(workflow).not.toContain('NODE_AUTH_TOKEN')
+    const validate = workflow.indexOf('pnpm exec tsx scripts/validate-release.ts')
+    const build = workflow.indexOf('run: pnpm build')
+    const publish = workflow.indexOf("pnpm -r --filter './packages/*' --fail-if-no-match publish")
+    expect(validate).toBeGreaterThan(-1)
+    expect(build).toBeGreaterThan(validate)
+    expect(publish).toBeGreaterThan(build)
+    expect(workflow).toContain('--registry https://registry.npmjs.org/')
+    expect(workflow).toContain('needs: publish\n    uses: ./.github/workflows/pages.yml')
+    expect(workflow).toContain('release_sha: ${{ github.sha }}')
   })
 
-  it('workflow 从 main 手动部署时以指定 tag 检出并校验发布快照', () => {
+  it.each(releasePackages)('%s 的公开包配置关联 Trusted Publishing 所用的源仓库', (name) => {
+    const manifest = JSON.parse(readFileSync(join(repository, 'packages', name, 'package.json'), 'utf8'))
+    expect(manifest.private).toBe(false)
+    expect(manifest.repository).toEqual({
+      type: 'git',
+      url: 'git+https://github.com/lyx-pj/primflow-js.git',
+      directory: `packages/${name}`,
+    })
+  })
+
+  it('Pages 自动部署等待发布任务，手动部署从 main 检出指定 tag 并检查 npm 版本', () => {
     const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
 
     expect(workflow).toContain('workflow_dispatch:\n    inputs:\n      release_tag:')
-    expect(workflow).toContain("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_tag != ''")
-    expect(workflow).toContain("format('refs/tags/{0}', inputs.release_tag)")
-    expect(workflow).toContain('RELEASE_REF: ${{ inputs.release_tag || github.ref_name }}')
+    expect(workflow).toContain('workflow_call:\n    inputs:\n      release_tag:')
+    expect(workflow).not.toMatch(/^  push:/m)
+    expect(workflow).toContain(
+      "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.release_tag != ''"
+    )
+    expect(workflow).toContain("inputs.release_sha || format('refs/tags/{0}', inputs.release_tag)")
+    expect(workflow).toContain('RELEASE_REF: ${{ inputs.release_tag }}')
+    expect(workflow).toContain('pnpm exec tsx scripts/validate-release.ts')
+    expect(workflow).toContain(
+      'npm view "$PNPM_PACKAGE_NAME@${RELEASE_REF#v}" version --registry https://registry.npmjs.org/'
+    )
+  })
+
+  it.each([
+    { missing: '', status: 0 },
+    { missing: '@lyx-pj/primflow-react', status: 1 },
+  ])('Pages 核对四个已发布的 npm 版本，缺包 $missing 时的退出状态为 $status', ({ missing, status }) => {
+    const workflow = readFileSync(join(repository, '.github/workflows/pages.yml'), 'utf8')
+    const step = workflow.match(/- name: 确认 npm 已发布此版本\n        run: \|\n([\s\S]+?)\n        env:/)?.[1]
+    expect(step).toBeDefined()
+
+    prepareRetry()
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n")
+    const bin = join(root, 'bin')
+    const checks = join(root, 'npm-checks')
+    mkdirSync(bin)
+    writeFileSync(
+      join(bin, 'npm'),
+      [
+        '#!/bin/sh',
+        'test "$1" = view && test "$3" = version && test "$5" = https://registry.npmjs.org/ || exit 2',
+        'printf "%s\\n" "$2" >> "$NPM_CHECKS"',
+        'if [ "${2%@*}" != "$MISSING_PACKAGE" ]; then printf "%s\\n" "${2##*@}"; fi',
+      ].join('\n'),
+      { mode: 0o755 }
+    )
+
+    const result = actualChild.spawnSync('sh', ['-ec', step!], {
+      cwd: root,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        RELEASE_REF: tag,
+        NPM_CHECKS: checks,
+        MISSING_PACKAGE: missing,
+      },
+      encoding: 'utf8',
+    })
+    expect(result.status, result.stdout + result.stderr).toBe(status)
+    const checked = readFileSync(checks, 'utf8').trim().split('\n').sort()
+    if (missing) {
+      expect(checked).toContain(`${missing}@0.0.7`)
+    } else {
+      expect(checked).toEqual(releasePackages.map((name) => `@lyx-pj/${name}@0.0.7`).sort())
+    }
   })
 
   it('Pages 产物在独立的构建任务上传，部署等待构建完成', () => {
@@ -407,7 +452,9 @@ describe('Pages 发布快照', () => {
 
     expect(workflow).toContain('id: deployment\n        continue-on-error: true')
     expect(workflow).toContain(`id: deployment_retry\n        if: ${retryCondition}`)
-    expect(workflow).toContain("if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome != 'success'\n        run: exit 1")
+    expect(workflow).toContain(
+      "if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome != 'success'\n        run: exit 1"
+    )
     expect(workflow).toContain('steps.deployment_retry.outputs.page_url || steps.deployment.outputs.page_url')
   })
 })

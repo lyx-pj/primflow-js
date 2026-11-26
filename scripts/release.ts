@@ -123,16 +123,13 @@ export function release(root = process.cwd()): void {
     if (
       !tagObject ||
       (existingTag && tagObject !== existingTag) ||
+      git('rev-parse', 'HEAD') !== releaseHead ||
       localRef(`${ref}^{commit}`) !== releaseHead ||
       hasChanges()
     ) {
       throw new Error('发布 tag 或工作区发生了变化。')
     }
 
-    run('pnpm', ['publish', '-r', '--access', 'public', '--registry', 'https://registry.npmjs.org/'])
-    if (git('rev-parse', 'HEAD') !== releaseHead || localRef(ref) !== tagObject || hasChanges()) {
-      throw new Error('npm 发布期间快照发生了变化，已停止推送。')
-    }
     // 使用已验证的对象推送，避免带上无关的本地 tag。
     run('git', [
       'push',
@@ -142,7 +139,7 @@ export function release(root = process.cwd()): void {
       `${releaseHead}:refs/heads/main`,
       `${tagObject}:${ref}`,
     ])
-    console.log('✅ 发布完成')
+    console.log(`已推送 ${tag}，请在 GitHub Actions 查看 npm 发布和 Pages 部署状态。`)
   } catch (error) {
     console.error('❌ 发布失败（保留现场，请检查后重试）：', error)
     process.exitCode = 1

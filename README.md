@@ -107,6 +107,12 @@ See [Architecture](docs/architecture.md) for module responsibilities, terminolog
 
 Before running browser tests for the first time, run `pnpm exec playwright install chromium`. Playwright starts the React example and launches an isolated Chromium context for each test. See the [React example test instructions](examples/primflow-react/README.md#validation).
 
+## Publishing
+
+Run `pnpm release` on `main` to prepare the version and push the release commit and tag. The [release workflow](.github/workflows/release.yml) publishes all four packages to npm and then deploys the example to GitHub Pages. If publishing fails, rerun the failed job for the same tag. It skips package versions that npm already has.
+
+Before the first release, configure [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/#configuring-trusted-publishing) on each of the four `@lyx-pj/primflow-*` packages. Select GitHub Actions, enter `lyx-pj` as the organization or user, `primflow-js` as the repository, and `release.yml` as the workflow filename. Leave the environment blank and allow `npm publish`.
+
 ## License
 
 MIT
