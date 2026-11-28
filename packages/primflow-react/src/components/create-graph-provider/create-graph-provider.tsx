@@ -7,6 +7,17 @@ import {
   type EditorRegistry,
   type NodeRendererRegistry
 } from '@lyx-pj/primflow-canvas'
+import { CanvasPortalHost } from '../react-mount/canvas-portal-host'
+import {
+  createReactPortalRegistry,
+  PortalRegistryContext,
+  type ReactMountFactory,
+} from '../react-mount/react-mount'
+
+export interface GraphContextHelpers {
+  /** Mount React JSX into canvas containers via portals inside `GraphProvider`. */
+  reactMount: ReactMountFactory
+}
 
 export interface GraphContextOptions {
   /** Canvas options forwarded to the Graph constructor. */
@@ -17,14 +28,14 @@ export interface GraphContextOptions {
    * Editors decide how a port value is edited, so they must be in place before
    * the canvas builds any port control.
    */
-  editors?: (editors: EditorRegistry) => void
+  editors?: (editors: EditorRegistry, helpers: GraphContextHelpers) => void
   /**
    * Register application node renderers before the first node renders.
    *
    * A renderer decides how a node definition looks, so it must be in place
    * before the canvas builds the node markup.
    */
-  nodeRenderers?: (renderers: NodeRendererRegistry) => void
+  nodeRenderers?: (renderers: NodeRendererRegistry, helpers: GraphContextHelpers) => void
 }
 
 export function createGraphContext<NodeDefs extends Record<string, NodeClassType>>(
@@ -45,15 +56,27 @@ export function createGraphContext<NodeDefs extends Record<string, NodeClassType
   const setupNodeRenderers = options && 'nodeRenderers' in options ? options.nodeRenderers : undefined
 
   function GraphProvider({ children }: { children: ReactNode }) {
-    // Lazy initialization creates one Graph instance for the mount lifetime.
-    // Recreating Graph on render would invalidate external references and rebuild the canvas.
-    const [graph] = useState(() => {
+    // Lazy initialization creates one Graph instance and one portal registry for
+    // the mount lifetime. Recreating Graph on render would invalidate external
+    // references and rebuild the canvas.
+    const [{ graph, portals }] = useState(() => {
+      const portalRegistry = createReactPortalRegistry()
+      const helpers: GraphContextHelpers = {
+        reactMount: (render) => portalRegistry.mount(render),
+      }
       const instance = new Graph(registry, canvasOptions)
-      setupEditors?.(instance.editors)
-      setupNodeRenderers?.(instance.nodeRenderers)
-      return instance
+      setupEditors?.(instance.editors, helpers)
+      setupNodeRenderers?.(instance.nodeRenderers, helpers)
+      return { graph: instance, portals: portalRegistry }
     })
-    return <GraphContext.Provider value={graph}>{children}</GraphContext.Provider>
+    return (
+      <PortalRegistryContext.Provider value={portals}>
+        <GraphContext.Provider value={graph}>
+          {children}
+          <CanvasPortalHost registry={portals} />
+        </GraphContext.Provider>
+      </PortalRegistryContext.Provider>
+    )
   }
 
   function useGraph() {
