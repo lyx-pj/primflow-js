@@ -1,5 +1,6 @@
 import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
 export const MANUAL_APPROVAL_KIND = 'manual-approval'
 
@@ -9,14 +10,14 @@ export const ManualApproval = defineNode({
       name: localize('Manual Approval', '人工审批'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'prompt', type: 'string', label: localize('Prompt', '审批提示') },
+        { name: 'prompt', type: 'string', label: localize('Prompt', '提示') },
       ] as const,
       outputs: [
         { name: 'approved', type: 'exec', label: localize('Approved', '通过') },
         { name: 'rejected', type: 'exec', label: localize('Rejected', '拒绝') },
-        { name: 'decision', type: 'boolean', label: localize('Decision', '审批结果') },
+        { name: 'decision', type: 'boolean', label: localize('Decision', '结果') },
       ] as const,
-      style: { header: { background: '#634489', color: '#fff' } },
+      style: headerStyle('flow'),
     } as const
   },
 
@@ -34,10 +35,10 @@ export const ThrowError = defineNode({
       name: localize('Throw Error', '抛出错误'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'message', type: 'string', label: localize('Message', '错误消息') },
+        { name: 'message', type: 'string', label: localize('Message', '消息') },
       ] as const,
       outputs: [] as const,
-      style: { header: { background: '#863d48', color: '#fff' } },
+      style: headerStyle('error'),
     } as const
   },
 

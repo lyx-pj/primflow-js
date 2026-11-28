@@ -107,7 +107,7 @@ test.each([['TextInput', 'value', '你好，工作流'], ['GetVariable', 'name',
         outputs: [{ name: 'exec', id: 'out-exec', type: 'exec' }, ...input.outputs.filter((port) => port.type !== 'exec')],
       }
     }
-    const data = link('second', 'value', 'Print', 'message')
+    const data = link('second', 'value', 'Print', 'value')
     json.nodes = [node('start'), legacyInput('first'), legacyInput('second'), node('Print')]
     json.links = [link('start', 'start', 'first'), link('first', 'exec', 'second'), link('second', 'exec', 'Print'), data]
     json.subgraphs.child = { nodes: json.nodes, links: json.links, viewport: json.viewport }

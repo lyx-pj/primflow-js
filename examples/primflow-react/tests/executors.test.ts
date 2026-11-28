@@ -21,12 +21,12 @@ test('节点只声明定义与执行器名称，执行逻辑放在执行器目�
 test('引擎按节点声明的名称找到已注册的执行器并执行', async () => {
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const instance = createEngine(
-    [node('start'), node('Print', 'read', { message: 'hello' })],
+    [node('start'), node('Print', 'read', { value: 'hello' })],
     [link('start', 'start', 'read')],
   )
   await instance.start()
   expect(instance.getNodeStatus('read')).toBe('completed')
-  expect(instance.getNodeExecutionData('read')?.outputs.result).toBe('hello')
+  expect(instance.getNodeExecutionData('read')?.outputs.value).toBe('hello')
   expect(console.log).toHaveBeenCalledWith('hello')
 })
 

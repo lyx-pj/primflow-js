@@ -1,16 +1,17 @@
 import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { NODE_COLORS } from './theme'
 
 /**
- * Demo node with an application-drawn body.
+ * Custom Card: demo node with an application-drawn body.
  *
  * The node keeps standard execution ports, but the example renders its own
- * card instead of the built-in header and body. See `context/node-renderers.ts`.
+ * card instead of the built-in header and body. See `context/node-renderers.tsx`.
  */
-export const DemoCard = defineNode({
+export const CustomCard = defineNode({
   get definition() {
     return {
-      name: localize('Custom Node', '自定义节点'),
+      name: localize('Custom Card', '自定义卡片'),
       inputs: [
         { name: 'exec', type: 'exec' },
         // The card draws its own captions and value display, so the canvas
@@ -18,14 +19,15 @@ export const DemoCard = defineNode({
         {
           name: 'label',
           type: 'string',
-          label: localize('Caption', '标题文字'),
+          label: localize('Label', '标题'),
           showLabel: false,
           showInput: false,
         },
       ] as const,
       outputs: [{ name: 'exec', type: 'exec' }] as const,
-      // The card is small, so it uses smaller ports than the default.
+      // Keep a header accent for the palette and minimap, with compact border ports.
       style: {
+        header: { background: NODE_COLORS.custom, color: '#ffffff' },
         ports: {
           input: { port: { r: 4 } },
           output: { port: { r: 4 } },

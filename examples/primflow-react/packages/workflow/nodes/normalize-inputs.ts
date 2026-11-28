@@ -1,7 +1,14 @@
 import { getJsonNodeDefinitionId, type JsonGraph, type JsonLink, type JsonNode } from '@lyx-pj/primflow-model'
 
 const dataOnlyTypes = new Set([
-  'TextInput', 'NumberInput', 'BooleanInput', 'ArrayInput', 'ObjectInput', 'MultilineTextInput', 'SelectInput', 'GetVariable',
+  'TextInput',
+  'NumberInput',
+  'BooleanInput',
+  'ArrayInput',
+  'ObjectInput',
+  'MultilineInput',
+  'SelectInput',
+  'GetVariable',
 ])
 
 type Endpoint = JsonLink['source']

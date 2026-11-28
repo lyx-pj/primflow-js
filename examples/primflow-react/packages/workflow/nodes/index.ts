@@ -1,17 +1,25 @@
-import { Image, ImageFile } from './Assets'
 import { NodeRegistry } from '@lyx-pj/primflow-model'
-import { IF } from './IF'
-import { Switch } from './Switch'
-import { Print } from './Print'
-import { HttpRequest } from './HttpRequest'
-import { Concat } from './Concat'
-import { TextInput, NumberInput, BooleanInput, ArrayInput, ObjectInput, MultilineTextInput, SelectInput } from './Input'
-import { TextTemplate, TextSplit, CheckString } from './Text'
-import { MathOperation, Compare } from './Math'
+import { Image, ImageFile } from './Assets'
+import { ConcatText } from './Concat'
 import { Delay } from './Delay'
-import { DemoCard } from './DemoCard'
+import { CustomCard } from './DemoCard'
+import { EmitEvent, OnEvent } from './Event'
 import { ManualApproval, ThrowError } from './Execution'
-import { EventListener, EventTrigger } from './Event'
+import { HttpRequest } from './HttpRequest'
+import { If } from './IF'
+import {
+  ArrayInput,
+  BooleanInput,
+  MultilineInput,
+  NumberInput,
+  ObjectInput,
+  SelectInput,
+  TextInput,
+} from './Input'
+import { Arithmetic, Compare } from './Math'
+import { Print } from './Print'
+import { Switch } from './Switch'
+import { CheckText, SplitText, TextTemplate } from './Text'
 import { Timer } from './Timer'
 import { GetVariable, SetVariable } from './Variable'
 
@@ -19,31 +27,30 @@ export function createRegistry() {
   return new NodeRegistry()
     .registerDataType(Image)
     .register('ImageFile', ImageFile)
-    .register('IF', IF)
-    .register('Switch', Switch)
-    .register('Print', Print)
-    .register('HttpRequest', HttpRequest)
-    .register('Concat', Concat)
     .register('TextInput', TextInput)
     .register('NumberInput', NumberInput)
     .register('BooleanInput', BooleanInput)
     .register('ArrayInput', ArrayInput)
     .register('ObjectInput', ObjectInput)
-    .register('MultilineTextInput', MultilineTextInput)
+    .register('MultilineInput', MultilineInput)
     .register('SelectInput', SelectInput)
-    .register('TextTemplate', TextTemplate)
-    .register('TextSplit', TextSplit)
-    .register('CheckString', CheckString)
-    .register('MathOperation', MathOperation)
-    .register('Compare', Compare)
-    .register('Delay', Delay)
-    .register('DemoCard', DemoCard)
-    .register('ManualApproval', ManualApproval)
-    .register('ThrowError', ThrowError)
     .register('SetVariable', SetVariable)
     .register('GetVariable', GetVariable)
-    .register('EventTrigger', EventTrigger)
-    .register('EventListener', EventListener)
-    // Keep the TimerEvent registration so saved graphs can still recognize this node type.
-    .register('TimerEvent', Timer)
+    .register('ConcatText', ConcatText)
+    .register('TextTemplate', TextTemplate)
+    .register('SplitText', SplitText)
+    .register('CheckText', CheckText)
+    .register('Arithmetic', Arithmetic)
+    .register('Compare', Compare)
+    .register('If', If)
+    .register('Switch', Switch)
+    .register('Delay', Delay)
+    .register('Timer', Timer)
+    .register('ManualApproval', ManualApproval)
+    .register('ThrowError', ThrowError)
+    .register('EmitEvent', EmitEvent)
+    .register('OnEvent', OnEvent)
+    .register('HttpRequest', HttpRequest)
+    .register('Print', Print)
+    .register('CustomCard', CustomCard)
 }

@@ -36,9 +36,9 @@ function countingBody(): JsonGraph['subgraphs'] {
   return body(
     [
       node('loop-entry', 'entry'),
-      node('MathOperation', 'math', { b: 1 }),
+      node('Arithmetic', 'math', { b: 1 }),
       node('Compare', 'compare', { b: 3, operation: 'gt' }),
-      node('IF', 'branch'),
+      node('If', 'branch'),
       node('loop-return', 'return'),
     ],
     [
@@ -76,7 +76,7 @@ test('循环体反复执行，结束条件由循环体自己决定，输出是�
     [
       node('start'),
       loopNode('loop', 'loop-body', { input: 0 }),
-      node('Print', 'done', { message: 'done' }),
+      node('Print', 'done', { value: 'done' }),
     ],
     [link('start', 'start', 'loop'), link('loop', 'done', 'done')],
     countingBody()
@@ -99,23 +99,23 @@ test('上一轮提交的值成为下一轮的入口值，循环体可以自己�
     [
       node('start'),
       loopNode('loop', 'loop-body', { input: 0 }),
-      node('Print', 'done', { message: 'done' }),
+      node('Print', 'done', { value: 'done' }),
     ],
     [link('start', 'start', 'loop'), link('loop', 'done', 'done')],
     body(
       [
         node('loop-entry', 'entry'),
         node('Print', 'body'),
-        node('MathOperation', 'math', { b: 1 }),
+        node('Arithmetic', 'math', { b: 1 }),
         node('Compare', 'compare', { b: 3, operation: 'gt' }),
-        node('IF', 'branch'),
+        node('If', 'branch'),
         node('loop-return', 'return'),
       ],
       [
         link('entry', 'exec', 'body', 'exec'),
-        link('entry', 'value', 'body', 'message'),
-        link('body', 'done', 'math', 'exec'),
-        link('body', 'result', 'math', 'a'),
+        link('entry', 'value', 'body', 'value'),
+        link('body', 'exec', 'math', 'exec'),
+        link('body', 'value', 'math', 'a'),
         link('math', 'exec', 'compare', 'exec'),
         link('math', 'result', 'compare', 'a'),
         link('compare', 'exec', 'branch', 'exec'),
@@ -137,18 +137,18 @@ test('上一轮提交的值成为下一轮的入口值，循环体可以自己�
 test('循环体用 break 结束，结束原因和最后一轮提交的值都能查询', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   const instance = createEngine(
-    [node('start'), loopNode('loop', 'loop-body', { input: 'A' }), node('Print', 'done', { message: 'done' })],
+    [node('start'), loopNode('loop', 'loop-body', { input: 'A' }), node('Print', 'done', { value: 'done' })],
     [link('start', 'start', 'loop'), link('loop', 'done', 'done')],
     body(
       [
         node('loop-entry', 'entry'),
-        node('Print', 'body', { message: 'round' }),
+        node('Print', 'body', { value: 'round' }),
         node('loop-return', 'return'),
       ],
       [
         link('entry', 'exec', 'body'),
-        link('body', 'done', 'return', 'break'),
-        link('body', 'result', 'return', 'value'),
+        link('body', 'exec', 'return', 'break'),
+        link('body', 'value', 'return', 'value'),
       ]
     )
   )
@@ -186,7 +186,7 @@ test('画布新建循环体自带的入口→返回连线没有结束条件，�
     [
       node('start'),
       loopNode('loop', 'loop-body', { input: 'A' }),
-      node('Print', 'done', { message: 'done' }),
+      node('Print', 'done', { value: 'done' }),
     ],
     [link('start', 'start', 'loop'), link('loop', 'done', 'done')],
     body(

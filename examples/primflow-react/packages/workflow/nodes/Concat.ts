@@ -1,34 +1,32 @@
 import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-export const Concat = defineNode({
+export const ConcatText = defineNode({
   retryPolicy: { idempotent: true, maxRetries: 1 },
 
   get definition() {
     return {
-      kind: 'default',
-      name: localize('Concatenate Text', '拼接文本'),
+      name: localize('Concat Text', '拼接文本'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'string1', type: 'string', label: localize('Text A', '文本 A') },
-        { name: 'string2', type: 'string', label: localize('Text B', '文本 B') },
-        { name: 'separator', type: 'string', label: localize('Separator', '连接符') },
+        { name: 'a', type: 'string', label: localize('A', '文本 A') },
+        { name: 'b', type: 'string', label: localize('B', '文本 B') },
+        { name: 'separator', type: 'string', label: localize('Separator', '分隔符') },
       ] as const,
       outputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'result', type: 'string', label: localize('Text', '文本') },
+        { name: 'result', type: 'string', label: localize('Result', '结果') },
       ] as const,
-      style: {
-        header: { background: '#6850a1', color: '#fff' },
-      },
+      style: headerStyle('text'),
     } as const
   },
 
-  executor: (ctx) => {
-    const string1 = ctx.getInput<string>('string1') ?? ''
-    const string2 = ctx.getInput<string>('string2') ?? ''
-    const result = string1 + (ctx.getInput<string>('separator') ?? '') + string2
-    ctx.setOutput('result', result)
-    ctx.next(['exec'])
+  executor: ({ getInput, setOutput, next }) => {
+    const a = getInput<string>('a') ?? ''
+    const b = getInput<string>('b') ?? ''
+    const separator = getInput<string>('separator') ?? ''
+    setOutput('result', `${a}${separator}${b}`)
+    next()
   },
 })

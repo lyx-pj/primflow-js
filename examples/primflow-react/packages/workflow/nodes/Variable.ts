@@ -1,7 +1,8 @@
 import { defineNode, NodeExecutionError, type JsonValue, type TaskStateSnapshot } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-const style = { header: { background: '#365b79', color: '#fff' } } as const
+const style = headerStyle('variables')
 
 function variableName(raw: string | undefined) {
   const name = raw?.trim()
@@ -20,12 +21,12 @@ export const SetVariable = defineNode({
       name: localize('Set Variable', '设置变量'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'name', type: 'string', label: localize('Variable name', '变量名') },
+        { name: 'name', type: 'string', label: localize('Name', '名称') },
         { name: 'value', type: 'any', label: localize('Value', '值') },
       ] as const,
       outputs: [{ name: 'exec', type: 'exec' }] as const,
       style,
-    }
+    } as const
   },
 
   executor: ({ getInput, state, next }) => {
@@ -60,10 +61,10 @@ export const GetVariable = defineNode({
   get definition() {
     return {
       name: localize('Get Variable', '获取变量'),
-      inputs: [{ name: 'name', type: 'string', label: localize('Variable name', '变量名') }] as const,
+      inputs: [{ name: 'name', type: 'string', label: localize('Name', '名称') }] as const,
       outputs: [{ name: 'value', type: 'any', label: localize('Value', '值') }] as const,
       valueOutputs: { value: { input: 'name', read: readVariable } },
       style,
-    }
+    } as const
   },
 })

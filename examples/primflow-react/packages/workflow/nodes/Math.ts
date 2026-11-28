@@ -1,20 +1,21 @@
 import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-const style = { header: { background: '#94642a', color: '#fff' } }
+const style = headerStyle('math')
 
-export const MathOperation = defineNode({
+export const Arithmetic = defineNode({
   get definition() {
     return {
       name: localize('Arithmetic', '四则运算'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'a', type: 'number', label: localize('Value A', '数值 A') },
+        { name: 'a', type: 'number', label: localize('A', '数值 A') },
         {
           name: 'operation',
           type: 'string',
           editor: 'select',
-          label: localize('Operation', '运算'),
+          label: localize('Op', '运算'),
           options: localize(
             [
               { label: 'Add +', value: 'add' },
@@ -30,7 +31,7 @@ export const MathOperation = defineNode({
             ],
           ),
         },
-        { name: 'b', type: 'number', label: localize('Value B', '数值 B') },
+        { name: 'b', type: 'number', label: localize('B', '数值 B') },
       ] as const,
       outputs: [
         { name: 'exec', type: 'exec' },
@@ -69,19 +70,19 @@ export const MathOperation = defineNode({
 export const Compare = defineNode({
   get definition() {
     return {
-      name: localize('Numeric Comparison', '数值比较'),
+      name: localize('Compare', '数值比较'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'a', type: 'number', label: localize('Value A', '数值 A') },
+        { name: 'a', type: 'number', label: localize('A', '数值 A') },
         {
           name: 'operation',
           type: 'string',
           editor: 'select',
-          label: localize('Condition', '条件'),
+          label: localize('Op', '条件'),
           options: localize(
             [
               { label: 'Greater than >', value: 'gt' },
-              { label: 'Greater than or equal ≥', value: 'gte' },
+              { label: 'Greater or equal ≥', value: 'gte' },
               { label: 'Equal =', value: 'eq' },
               { label: 'Less than <', value: 'lt' },
             ],
@@ -93,11 +94,11 @@ export const Compare = defineNode({
             ],
           ),
         },
-        { name: 'b', type: 'number', label: localize('Value B', '数值 B') },
+        { name: 'b', type: 'number', label: localize('B', '数值 B') },
       ] as const,
       outputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'result', type: 'boolean', label: localize('Satisfied', '是否满足') },
+        { name: 'result', type: 'boolean', label: localize('Result', '结果') },
       ] as const,
       style,
     } as const

@@ -21,19 +21,19 @@ test('普通视图执行按视图名命名，子图文件多标一个【子图�
 })
 
 test('事件执行带上监听节点与事件名', () => {
-  expect(formatOriginTitle({ kind: 'event', nodeName: '事件监听', eventName: 'demo:message' })).toBe(
-    '执行事件【事件监听】【demo:message】',
+  expect(formatOriginTitle({ kind: 'event', nodeName: '监听事件', eventName: 'demo' })).toBe(
+    '执行事件【监听事件】【demo】',
   )
 })
 
 test('按事件名找出节点，子图区域里的节点也参与匹配', () => {
   const json: JsonGraph = {
-    nodes: [node('EventTrigger', 'trigger'), node('EventListener', 'listener')],
+    nodes: [node('EmitEvent', 'trigger'), node('OnEvent', 'listener')],
     links: [],
     variables: [],
     subgraphs: {
       child: {
-        nodes: [node('EventListener', 'child-listener', { event: 'demo:other' })],
+        nodes: [node('OnEvent', 'child-listener', { event: 'demo:other' })],
         links: [],
         viewport: { x: 0, y: 0, zoom: 1 },
       },
@@ -41,7 +41,7 @@ test('按事件名找出节点，子图区域里的节点也参与匹配', () =>
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  expect(findEventNodes(json, 'demo:message').map((item) => item.id)).toEqual([
+  expect(findEventNodes(json, 'demo').map((item) => item.id)).toEqual([
     'trigger',
     'listener',
   ])
@@ -50,14 +50,14 @@ test('按事件名找出节点，子图区域里的节点也参与匹配', () =>
 
 test('同名节点里优先选 source 型的监听节点', () => {
   const json: JsonGraph = {
-    nodes: [node('EventTrigger', 'trigger'), node('EventListener', 'listener')],
+    nodes: [node('EmitEvent', 'trigger'), node('OnEvent', 'listener')],
     links: [],
     variables: [],
     subgraphs: {},
     viewport: { x: 0, y: 0, zoom: 1 },
   }
-  const matched = findEventNodes(json, 'demo:message')
-  const isSource = (nodeType: string) => nodeType === 'EventListener'
+  const matched = findEventNodes(json, 'demo')
+  const isSource = (nodeType: string) => nodeType === 'OnEvent'
 
   expect(pickListenerNode(matched, isSource)?.id).toBe('listener')
   // Fall back to the first match when no source node exists, so the title is not empty.
@@ -101,7 +101,7 @@ function bindPanel(engine: DemoEngine, view: ViewMeta) {
  */
 async function runRecords(view: ViewMeta) {
   const engine = createEngine(
-    [node('start'), node('EventTrigger', 'trigger'), node('EventListener', 'listener')],
+    [node('start'), node('EmitEvent', 'trigger'), node('OnEvent', 'listener')],
     [link('start', 'start', 'trigger')],
   )
   const { dispose, records } = bindPanel(engine, view)
@@ -123,8 +123,8 @@ test('英文浏览器语言下执行记录使用英文标题', () => {
   expect(formatOriginTitle({ kind: 'flow', viewName: 'Order subgraph', viewType: 'subgraph' })).toBe(
     'Run [Subgraph] [Order subgraph]',
   )
-  expect(formatOriginTitle({ kind: 'event', nodeName: 'Event Listen', eventName: 'demo:message' })).toBe(
-    'Run event [Event Listen] [demo:message]',
+  expect(formatOriginTitle({ kind: 'event', nodeName: 'On Event', eventName: 'demo' })).toBe(
+    'Run event [On Event] [demo]',
   )
 })
 
@@ -132,13 +132,13 @@ test('执行记录按发起它的视图命名：普通视图、子图文件、�
   const view: ViewMeta = { id: 'view-1', name: '订单流程', type: 'view', updatedAt: 0 }
   const records = await runRecords(view)
   expect(records.map((record) => record.title)).toEqual([
-    '执行事件【事件监听】【demo:message】',
+    '执行事件【监听事件】【demo】',
     '执行【订单流程】',
   ])
 
   const subgraphRecords = await runRecords({ ...view, name: '订单子图', type: 'subgraph' })
   expect(subgraphRecords.map((record) => record.title)).toEqual([
-    '执行事件【事件监听】【demo:message】',
+    '执行事件【监听事件】【demo】',
     '执行【子图】【订单子图】',
   ])
 })

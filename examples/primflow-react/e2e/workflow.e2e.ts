@@ -179,7 +179,7 @@ test('画布避开侧栏和顶栏后，框选仍跟随光标并选中框内节�
 })
 
 test('从输入端反向拖出的连线可以保存、恢复和执行', async ({ page }) => {
-  const output = await addNodeAt(page, 'Debug Output', 535, 280)
+  const output = await addNodeAt(page, 'Print', 535, 280)
   await waitForSaved(page)
   const status = page.getByRole('status').filter({ hasText: /^Saved/ })
   const beforeLink = await status.textContent()
@@ -271,14 +271,14 @@ test('已有连线端点拖到空白后替换目标节点，并可一次撤销�
 
 test('下拉和多行编辑器保留字符串输入类型', async ({ page }) => {
   const select = await addNodeAt(page, 'Select Input', 530, 180)
-  const text = await addNodeAt(page, 'Multiline Text Input', 750, 340)
+  const text = await addNodeAt(page, 'Multiline Input', 750, 340)
   const panel = page.locator('.bpgraph-node-panel')
   await openNodePanel(page)
   await select.getByText('Select Input', { exact: true }).click()
   await expect(panel.getByText('value · string', { exact: true })).toBeVisible()
   await panel.locator('select[data-field="value"]').selectOption('medium')
 
-  await text.getByText('Multiline Text Input', { exact: true }).click()
+  await text.getByText('Multiline Input', { exact: true }).click()
   await expect(panel.getByText('value · string', { exact: true })).toBeVisible()
   await panel.locator('textarea[data-field="value"]').fill('First\nSecond')
   await expect(panel.locator('textarea[data-field="value"]')).toHaveValue('First\nSecond')
@@ -438,12 +438,12 @@ test('添加面板的搜索框聚焦时不显示 outline', async ({ page }) => {
 
 test('基础输入分类展示七种节点，并可按 JSON 搜索', async ({ page }) => {
   const palette = await openPalette(page, 500, 180)
-  await palette.getByRole('button', { name: /^Basic input/ }).click()
-  const group = palette.getByRole('region', { name: 'Basic input' })
+  await palette.getByRole('button', { name: /^Inputs/ }).click()
+  const group = palette.getByRole('region', { name: 'Inputs' })
   await expect(group.getByRole('button')).toHaveCount(7)
   for (const title of [
-    'Text Input', 'Number Input', 'Toggle Input', 'Array Input',
-    'Object Input', 'Multiline Text Input', 'Select Input',
+    'Text Input', 'Number Input', 'Boolean Input', 'Array Input',
+    'Object Input', 'Multiline Input', 'Select Input',
   ]) {
     await expect(group.getByRole('button', { name: title, exact: true })).toBeVisible()
   }
@@ -553,7 +553,7 @@ test('JSON 代码编辑器在语法错误时保留上一次的有效值', async 
 test('执行节点按需读取基础输入的值，基础输入无需执行连线', async ({ page }) => {
   const start = canvasNode(page, 'Start')
   const input = await addNode(page, 'Text Input', 500, 180)
-  const output = await addNode(page, 'Debug Output', 780, 180)
+  const output = await addNode(page, 'Print', 780, 180)
   await input.getByRole('textbox', { name: 'Text' }).fill('Playwright workflow result')
 
   const exec = '[port-group="out"] [data-port-kind="exec"]'
@@ -597,8 +597,8 @@ test('HTTP 请求失败时错误分支执行，成功分支被跳过', async ({ 
   await page.route('**/http-example.json', (route) => route.abort('connectionrefused'))
 
   const http = await addNodeAt(page, 'HTTP Request', 660, 320)
-  const success = await addNodeAt(page, 'Debug Output', 900, 220)
-  const failure = await addNodeAt(page, 'Debug Output', 900, 420)
+  const success = await addNodeAt(page, 'Print', 900, 220)
+  const failure = await addNodeAt(page, 'Print', 900, 420)
 
   const execOut = '[port-group="out"] [data-port-kind="exec"]'
   const execIn = '[port-group="in"] [data-port-kind="exec"]'
@@ -616,8 +616,9 @@ test('HTTP 请求失败时错误分支执行，成功分支被跳过', async ({ 
 })
 
 test('未选中的条件分支显示灰蓝色光晕', async ({ page }) => {
-  const condition = await addNode(page, 'Condition', 500, 180)
-  const delay = await addNode(page, 'Delay', 800, 360)
+  await closeNodePanel(page)
+  const condition = await addNodeAt(page, 'If', 420, 200)
+  const delay = await addNodeAt(page, 'Delay', 920, 520)
   const out = '[port-group="out"] [data-port-kind="exec"]'
   const input = '[port-group="in"] [data-port-kind="exec"]'
   await connect(page, canvasNode(page, 'Start').locator(out), condition.locator(input))
@@ -629,6 +630,8 @@ test('未选中的条件分支显示灰蓝色光晕', async ({ page }) => {
   await expect(delay).toHaveAttribute('data-node-execution-status', 'skipped')
   await expect(delay.getByRole('img', { name: 'Skipped' })).toBeVisible()
   await expect(delay.locator('.bpgraph-node-execution-halo')).toHaveCSS('filter', 'blur(8px)')
+  await page.mouse.click(100, 500)
+  await expect(page.getByRole('tooltip', { name: 'If execution data' })).toHaveCount(0)
   await delay.getByText('Delay', { exact: true }).hover()
   await expect(page.getByRole('tooltip', { name: 'Delay execution status' })).toContainText('Skipped')
 })
@@ -638,7 +641,7 @@ test('停止等待节点显示橙色取消光晕', async ({ page }) => {
   await connect(page, canvasNode(page, 'Start').locator('[port-group="out"] [data-port-kind="exec"]'),
     delay.locator('[port-group="in"] [data-port-kind="exec"]'))
   await expect(page.locator('.bpgraph-link')).toHaveCount(1)
-  const milliseconds = delay.getByRole('textbox', { name: 'Milliseconds' })
+  const milliseconds = delay.getByRole('textbox', { name: 'Duration (ms)' })
   const run = page.getByRole('button', { name: 'Run', exact: true })
   const stop = page.getByRole('button', { name: 'Stop', exact: true })
   const tooltip = page.getByRole('tooltip', { name: 'Delay execution status' })
@@ -663,7 +666,7 @@ test('执行中的任务出现在调试面板的执行记录里，状态为运�
   await connect(page, canvasNode(page, 'Start').locator('[port-group="out"] [data-port-kind="exec"]'),
     delay.locator('[port-group="in"] [data-port-kind="exec"]'))
   await expect(page.locator('.bpgraph-link')).toHaveCount(1)
-  await delay.getByRole('textbox', { name: 'Milliseconds' }).fill('60000')
+  await delay.getByRole('textbox', { name: 'Duration (ms)' }).fill('60000')
 
   await page.getByRole('button', { name: 'Run', exact: true }).click()
   await page.getByRole('button', { name: 'Show debug panel' }).click()
@@ -681,7 +684,7 @@ test('执行中的任务出现在调试面板的执行记录里，状态为运�
 })
 
 test('回溯模式下小地图停在左下角并避开回溯横幅', async ({ page }) => {
-  const output = await addNode(page, 'Debug Output', 540, 180)
+  const output = await addNode(page, 'Print', 540, 180)
   await connect(
     page,
     canvasNode(page, 'Start').locator('[port-group="out"] [data-port-kind="exec"]'),
@@ -712,7 +715,7 @@ test('回溯模式下小地图停在左下角并避开回溯横幅', async ({ pa
 test('人工审批可通过、拒绝或停止，并显示对应节点状态', async ({ page }) => {
   await closeNodePanel(page)
   const approval = await addNodeAt(page, 'Manual Approval', 460, 280)
-  const output = await addNodeAt(page, 'Debug Output', 895, 145)
+  const output = await addNodeAt(page, 'Print', 895, 145)
   const failure = await addNodeAt(page, 'Throw Error', 895, 450)
   const out = '[port-group="out"] [data-port-kind="exec"]'
   const input = '[port-group="in"] [data-port-kind="exec"]'
@@ -734,8 +737,8 @@ test('人工审批可通过、拒绝或停止，并显示对应节点状态', as
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toBeDisabled()
   await approval.getByText('Manual Approval', { exact: true }).hover()
   await expect(page.getByRole('tooltip', { name: 'Manual Approval execution status' })).toContainText('Waiting for external input')
-  await output.getByText('Debug Output', { exact: true }).hover()
-  await expect(page.getByRole('tooltip', { name: 'Debug Output execution status' })).toContainText('Pending')
+  await output.getByText('Print', { exact: true }).hover()
+  await expect(page.getByRole('tooltip', { name: 'Print execution status' })).toContainText('Pending')
   await requests.getByRole('button', { name: 'Approve', exact: true }).click()
   await expect(requests).toHaveCount(0)
   await expect(approval).toHaveAttribute('data-node-execution-status', 'completed')
@@ -769,9 +772,9 @@ test('同一数据输入保留多条连线，刷新后读取排在最后的就�
   await closeNodePanel(page)
   const text = await addNodeAt(page, 'Text Input', 460, 220)
   const number = await addNodeAt(page, 'Number Input', 460, 500)
-  const output = await addNodeAt(page, 'Debug Output', 880, 340)
+  const output = await addNodeAt(page, 'Print', 880, 340)
   await text.getByRole('textbox', { name: 'Text' }).fill('First data source')
-  await number.getByRole('textbox', { name: 'Value' }).fill('42')
+  await number.getByRole('textbox', { name: 'Number' }).fill('42')
 
   const dataOutput = '[port-group="out"] [data-port-kind="data"]'
   const dataInput = output.locator('[port-group="in"] [data-port-kind="data"]')
@@ -800,13 +803,13 @@ test('同一数据输入保留多条连线，刷新后读取排在最后的就�
 })
 
 test('节点属性显示已声明的重试策略', async ({ page }) => {
-  const node = await addNode(page, 'Concatenate Text', 500, 180)
+  const node = await addNode(page, 'Concat Text', 500, 180)
   await openNodePanel(page)
   await node.click({ position: { x: 24, y: 12 } })
   const panel = page.locator('.bpgraph-node-panel')
   const instanceId = await node.getAttribute('model-id')
   expect(instanceId).toBeTruthy()
-  await expect(panel.getByText('Definition ID: Concat', { exact: true })).toBeVisible()
+  await expect(panel.getByText('Definition ID: ConcatText', { exact: true })).toBeVisible()
   await expect(panel.getByText(`Instance ID: ${instanceId}`, { exact: true })).toBeVisible()
   await expect(panel.getByText(/^Behavior:/)).toHaveCount(0)
   await expect(panel.getByText(/^Definition name:/)).toHaveCount(0)
@@ -818,7 +821,7 @@ test('画布可以设置和获取变量，并用指定字符串校验读到的�
   await closeNodePanel(page)
   const set = await addNodeAt(page, 'Set Variable', 530, 165)
   const get = await addNodeAt(page, 'Get Variable', 620, 440)
-  const check = await addNodeAt(page, 'Check String', 945, 230)
+  const check = await addNodeAt(page, 'Check Text', 945, 230)
 
   await openNodePanel(page)
   await set.click({ position: { x: 24, y: 12 } })
@@ -841,8 +844,8 @@ test('画布可以设置和获取变量，并用指定字符串校验读到的�
 
   await page.getByRole('button', { name: 'Run', exact: true }).click()
   await expect(check).toHaveAttribute('data-node-execution-status', 'completed')
-  await check.getByText('Check String', { exact: true }).hover()
-  await expect(page.getByRole('tooltip', { name: 'Check String execution data' })).toContainText('ready')
+  await check.getByText('Check Text', { exact: true }).hover()
+  await expect(page.getByRole('tooltip', { name: 'Check Text execution data' })).toContainText('ready')
 })
 
 test('并行分支晚写变量时重试，悬浮卡和节点面板显示尝试和执行结果', async ({ page }) => {
@@ -851,8 +854,8 @@ test('并行分支晚写变量时重试，悬浮卡和节点面板显示尝试�
   const set = await addNodeAt(page, 'Set Variable', 865, 160)
   const text = await addNodeAt(page, 'Text Input', 720, 290)
   const get = await addNodeAt(page, 'Get Variable', 440, 535)
-  const check = await addNodeAt(page, 'Check String', 720, 420)
-  const print = await addNodeAt(page, 'Debug Output', 1090, 560)
+  const check = await addNodeAt(page, 'Check Text', 720, 420)
+  const print = await addNodeAt(page, 'Print', 1090, 560)
   const panel = page.locator('.bpgraph-node-panel')
   const start = canvasNode(page, 'Start')
   const execOut = '[port-group="out"] [data-port-kind="exec"]'
@@ -868,13 +871,13 @@ test('并行分支晚写变量时重试，悬浮卡和节点面板显示尝试�
   await connect(page, check.locator(execOut), print.locator(execIn))
   await connect(page, check.locator(dataOut), print.locator(dataIn))
   await expect(page.locator('.bpgraph-link')).toHaveCount(7)
-  await delay.getByRole('textbox', { name: 'Milliseconds' }).fill('200')
+  await delay.getByRole('textbox', { name: 'Duration (ms)' }).fill('200')
   await text.getByRole('textbox', { name: 'Text' }).fill('ready')
 
   await page.getByRole('button', { name: 'Run', exact: true }).click()
   await expect(print).toHaveAttribute('data-node-execution-status', 'completed')
-  await check.getByText('Check String', { exact: true }).hover()
-  const tooltip = page.getByRole('tooltip', { name: 'Check String execution data' })
+  await check.getByText('Check Text', { exact: true }).hover()
+  const tooltip = page.getByRole('tooltip', { name: 'Check Text execution data' })
   await expect(tooltip.getByText('Retried once', { exact: true })).toHaveCSS('color', 'rgb(252, 211, 77)')
   await expect(tooltip.getByText('Retry reason', { exact: true })).toBeVisible()
   await expect(tooltip.getByText('Completed', { exact: true })).toHaveCSS('color', 'rgb(110, 231, 183)')
@@ -890,14 +893,14 @@ test('并行分支晚写变量时重试，悬浮卡和节点面板显示尝试�
 
   await page.getByRole('button', { name: 'Stop', exact: true }).click()
   await panel.getByRole('button', { name: 'Close' }).click()
-  await get.getByRole('textbox', { name: 'Variable name' }).fill('never-written')
+  await get.getByRole('textbox', { name: 'Name' }).fill('never-written')
   await page.mouse.click(150, 180)
   await openNodePanel(page)
   await check.click({ position: { x: 24, y: 12 } })
-  await expect(panel.getByRole('heading', { name: 'Check String', exact: true })).toBeVisible()
+  await expect(panel.getByRole('heading', { name: 'Check Text', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Run', exact: true }).click()
   await expect(check).toHaveAttribute('data-node-execution-status', 'failed')
-  await check.getByText('Check String', { exact: true }).hover()
+  await check.getByText('Check Text', { exact: true }).hover()
   await expect(tooltip).toContainText('Retried 2 times')
   await expect(tooltip.getByText('Retry limit reached', { exact: true })).toHaveCSS('color', 'rgb(252, 165, 165)')
   await expect(tooltip.getByText('Failed', { exact: true })).toHaveCSS('color', 'rgb(252, 165, 165)')
@@ -919,7 +922,7 @@ test('变量校验失败后重试并读取到另一个分支写入的值', async
   await closeNodePanel(page)
   const wrong = await addNodeAt(page, 'Set Variable', 300, 240)
   const get = await addNodeAt(page, 'Get Variable', 620, 140)
-  const check = await addNodeAt(page, 'Check String', 900, 240)
+  const check = await addNodeAt(page, 'Check Text', 900, 240)
   const delay = await addNodeAt(page, 'Delay', 620, 360)
   const ready = await addNodeAt(page, 'Set Variable', 300, 460)
   const start = canvasNode(page, 'Start')
@@ -930,7 +933,7 @@ test('变量校验失败后重试并读取到另一个分支写入的值', async
 
   // The first branch writes a wrong value; the other branch writes the expected one later.
   // String ports have inline editors; "any" ports are set in the node panel.
-  await wrong.getByRole('textbox', { name: 'Variable name' }).fill('status')
+  await wrong.getByRole('textbox', { name: 'Name' }).fill('status')
   await openNodePanel(page)
   await wrong.click({ position: { x: 24, y: 12 } })
   const panel = page.locator('.bpgraph-node-panel')
@@ -939,9 +942,9 @@ test('变量校验失败后重试并读取到另一个分支写入的值', async
   await ready.click({ position: { x: 24, y: 12 } })
   await panel.locator('input[data-field="value"]').fill('ready')
   await panel.getByRole('button', { name: 'Close' }).click()
-  await get.getByRole('textbox', { name: 'Variable name' }).fill('status')
-  await check.getByRole('textbox', { name: 'Expected string' }).fill('ready')
-  await delay.getByRole('textbox', { name: 'Milliseconds' }).fill('200')
+  await get.getByRole('textbox', { name: 'Name' }).fill('status')
+  await check.getByRole('textbox', { name: 'Expected' }).fill('ready')
+  await delay.getByRole('textbox', { name: 'Duration (ms)' }).fill('200')
 
   await connect(page, start.locator(execOut), wrong.locator(execIn))
   await expect(page.locator('.bpgraph-link')).toHaveCount(1)
@@ -1057,16 +1060,59 @@ test('an image node picks a file with its centered button and previews it inside
   await expect(selection).toBeVisible()
 })
 
+test('the image preview does not start a native drag and still moves the node', async ({ page }) => {
+  const file = await addNode(page, 'Image File', 420, 500)
+
+  const chooser = page.waitForEvent('filechooser')
+  await file.locator('.image-file-button').click()
+  await (await chooser).setFiles({
+    name: 'preview.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/v9sAAAAASUVORK5CYII=', 'base64'),
+  })
+  const preview = file.getByRole('img', { name: 'Image preview' })
+  await expect(preview).toBeVisible()
+
+  // Images are draggable by default, and the native drag would replace the
+  // canvas node drag while the pointer is over the thumbnail.
+  await expect(preview).toHaveAttribute('draggable', 'false')
+  await expect(preview).toHaveJSProperty('draggable', false)
+
+  // Track the native drag events the browser would fire for a draggable image.
+  await page.evaluate(() => {
+    const events: string[] = []
+    ;(window as unknown as { __nativeDrag: string[] }).__nativeDrag = events
+    for (const type of ['dragstart', 'drag', 'dragend']) {
+      window.addEventListener(type, (evt) => {
+        events.push(`${type}:${(evt.target as Element).tagName}`)
+      }, true)
+    }
+  })
+
+  // Dragging the thumbnail moves the node like any other part of the card.
+  const before = await file.evaluate((el) => el.closest('[model-id]')?.getAttribute('transform'))
+  const box = (await preview.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 60, { steps: 10 })
+  await page.mouse.up()
+  const after = await file.evaluate((el) => el.closest('[model-id]')?.getAttribute('transform'))
+  expect(after).not.toBe(before)
+
+  // No native drag took over, so the node followed the pointer the whole way.
+  expect(await page.evaluate(() => (window as unknown as { __nativeDrag: string[] }).__nativeDrag)).toEqual([])
+})
+
 test('自定义节点归入其他节点分类', async ({ page }) => {
   const palette = await openPalette(page, 500, 180)
   await palette.getByRole('button', { name: /^Other nodes/ }).click()
   const group = palette.getByRole('region', { name: 'Other nodes' })
   await expect(group.getByRole('button')).toHaveCount(1)
-  await expect(group.getByRole('button', { name: 'Custom Node' })).toBeVisible()
+  await expect(group.getByRole('button', { name: 'Custom Card' })).toBeVisible()
 })
 
 test('a node renderer replaces the built-in body while ports keep working', async ({ page }) => {
-  const node = await addNode(page, 'Custom Node', 430, 500)
+  const node = await addNode(page, 'Custom Card', 430, 500)
 
   // The application draws its own card instead of the built-in header and body.
   const card = node.locator('.demo-card')
@@ -1112,9 +1158,9 @@ test('a node renderer replaces the built-in body while ports keep working', asyn
 })
 
 test('a node renderer updates when the node value changes', async ({ page }) => {
-  const node = await addNode(page, 'Custom Node', 430, 500)
+  const node = await addNode(page, 'Custom Card', 430, 500)
   await openNodePanel(page)
-  await node.getByText('Custom Node', { exact: true }).click()
+  await node.getByText('Custom Card', { exact: true }).click()
 
   const field = page.locator('.bpgraph-node-panel-field input').first()
   await field.fill('Updated caption')
@@ -1161,13 +1207,13 @@ test('hovering a port shows its label and type in a tooltip instead of a native 
   const dataInput = delay.locator('[port-group="in"] [data-port-kind="data"]')
   // The shape no longer carries a native title element.
   await expect(dataInput.locator('title')).toHaveCount(0)
-  await expect(dataInput).toHaveAttribute('aria-label', 'Milliseconds (number)')
+  await expect(dataInput).toHaveAttribute('aria-label', 'Duration (ms) (number)')
 
   await dataInput.hover()
   const tooltip = page.locator('.bpgraph-port-tooltip')
   await expect(tooltip).toBeVisible()
   await expect(tooltip).toHaveAttribute('role', 'tooltip')
-  await expect(tooltip.locator('.bpgraph-port-tooltip-name')).toHaveText('Milliseconds')
+  await expect(tooltip.locator('.bpgraph-port-tooltip-name')).toHaveText('Duration (ms)')
   await expect(tooltip.locator('.bpgraph-port-tooltip-type')).toHaveText('number')
 
   // A port without a label falls back to its name.
@@ -1185,9 +1231,9 @@ test('已连接端口的外半区优先响应 tooltip 和新连线', async ({ pa
   // lands on blank canvas instead of the panel.
   await closeNodePanel(page)
   const delay = await addNodeAt(page, 'Delay', 520, 220)
-  const print = await addNodeAt(page, 'Debug Output', 860, 220)
+  const print = await addNodeAt(page, 'Print', 860, 220)
   const secondTarget = await addNodeAt(page, 'Manual Approval', 860, 430)
-  const custom = await addNodeAt(page, 'Custom Node', 430, 520)
+  const custom = await addNodeAt(page, 'Custom Card', 430, 520)
   await connect(page, canvasNode(page, 'Start').locator('[port-group="out"] [data-port-kind="exec"]'),
     delay.locator('[port-group="in"] [data-port-kind="exec"]'))
   await connect(page, delay.locator('[port-group="out"] [data-port-kind="exec"]'),
@@ -1240,9 +1286,9 @@ test('已连接端口的外半区优先响应 tooltip 和新连线', async ({ pa
 })
 
 test('panel sections reshape one node without changing the others', async ({ page }) => {
-  const custom = await addNode(page, 'Custom Node', 430, 500)
+  const custom = await addNode(page, 'Custom Card', 430, 500)
   await openNodePanel(page)
-  await custom.getByText('Custom Node', { exact: true }).click()
+  await custom.getByText('Custom Card', { exact: true }).click()
   const panel = page.locator('.bpgraph-node-panel')
   // The demo node drops the built-in Outputs block, so only Inputs keeps a title.
   await expect(panel.locator('.bpgraph-node-panel-section-title')).toHaveText(['Inputs'])

@@ -1,19 +1,19 @@
 import { defineNode, type InputPort, type PortType } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-const style = { header: { background: '#315f9e', color: '#fff' } }
+const style = headerStyle('inputs')
 
 function valueInputDefinition(
   name: string,
   input: InputPort<PortType>,
   outputType: PortType,
   fallback: unknown,
-  outputLabel = input.label,
 ) {
   return {
     name,
     inputs: [input],
-    outputs: [{ name: 'value', type: outputType, label: outputLabel }],
+    outputs: [{ name: 'value', type: outputType, label: input.label }],
     valueOutputs: { value: { input: 'value', fallback } },
     style,
   } as const
@@ -34,18 +34,18 @@ export const NumberInput = defineNode({
     return valueInputDefinition(localize('Number Input', '数字输入'), {
       name: 'value',
       type: 'number',
-      label: localize('Value', '数值'),
+      label: localize('Number', '数值'),
     }, 'number', 0)
   },
 })
 
 export const BooleanInput = defineNode({
   get definition() {
-    return valueInputDefinition(localize('Toggle Input', '开关输入'), {
+    return valueInputDefinition(localize('Boolean Input', '布尔输入'), {
       name: 'value',
       type: 'boolean',
-      label: localize('On', '开启'),
-    }, 'boolean', false, localize('Toggle', '开关'))
+      label: localize('Boolean', '布尔值'),
+    }, 'boolean', false)
   },
 })
 
@@ -69,9 +69,9 @@ export const ObjectInput = defineNode({
   },
 })
 
-export const MultilineTextInput = defineNode({
+export const MultilineInput = defineNode({
   get definition() {
-    return valueInputDefinition(localize('Multiline Text Input', '多行文本输入'), {
+    return valueInputDefinition(localize('Multiline Input', '多行输入'), {
       name: 'value',
       type: 'string',
       editor: 'textarea',
@@ -82,11 +82,11 @@ export const MultilineTextInput = defineNode({
 
 export const SelectInput = defineNode({
   get definition() {
-    return valueInputDefinition(localize('Select Input', '下拉选择'), {
+    return valueInputDefinition(localize('Select Input', '下拉输入'), {
       name: 'value',
       type: 'string',
       editor: 'select',
-      label: localize('Size', '尺寸'),
+      label: localize('Option', '选项'),
       options: [
         { label: localize('Small', '小'), value: 'small' },
         { label: localize('Medium', '中'), value: 'medium' },

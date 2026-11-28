@@ -271,7 +271,7 @@ export function ViewSwitcher({
             <div role="presentation" className={sectionClass} />
             <ListboxOption
               value={CREATE_VALUE}
-              className={({ focus }) => `${optionClass} ${focus ? 'bg-white/8' : ''}`}
+              className={({ focus }) => `flex cursor-pointer items-center justify-start gap-2 rounded px-2 py-1.5 text-white focus:outline-none ${focus ? 'bg-white/8' : ''}`}
             >
               <PlusIcon />
               <span>{translate(language, 'file.new')}</span>

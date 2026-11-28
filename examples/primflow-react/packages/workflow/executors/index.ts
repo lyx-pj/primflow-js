@@ -24,11 +24,11 @@ export const businessLog = defineService('businessLog', { value: appendBusinessL
 
 /** Write a value to the console and the business log, then publish it downstream. */
 export const printExecutor = defineExecutor(Print, ({ getInput, setOutput, next, taskId, services }) => {
-  const message = getInput('message')
-  console.log(message)
+  const value = getInput('value')
+  console.log(value)
   // Business output joins the engine log of the same task as one application line.
   const businessLog = services.require('businessLog')
-  businessLog(taskId, describeValue(message))
-  setOutput('result', message)
-  next(['done'])
+  businessLog(taskId, describeValue(value))
+  setOutput('value', value)
+  next(['exec'])
 }, { services: [businessLog] })

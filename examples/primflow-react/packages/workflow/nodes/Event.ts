@@ -1,24 +1,25 @@
 import { defineNode, type NodeLifecycleContext } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-const style = { header: { background: '#7a4b9e', color: '#fff' } }
+const style = headerStyle('events')
 
 /**
- * Event Emit: emits a business event in the current execution flow.
+ * Emit Event: emits a business event in the current execution flow.
  * The event creates a separate task; this node does not wait for listeners and continues its own downstream.
  */
-export const EventTrigger = defineNode({
+export const EmitEvent = defineNode({
   get definition() {
     return {
-      name: localize('Event Emit', '事件触发'),
+      name: localize('Emit Event', '发送事件'),
       inputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'event', type: 'string', label: localize('Event name', '事件名') },
-        { name: 'payload', type: 'any', label: localize('Event data', '事件数据') },
+        { name: 'event', type: 'string', label: localize('Event', '事件') },
+        { name: 'payload', type: 'any', label: localize('Payload', '数据') },
       ] as const,
       outputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'payload', type: 'any', label: localize('Event data', '事件数据') },
+        { name: 'payload', type: 'any', label: localize('Payload', '数据') },
       ] as const,
       style,
     } as const
@@ -26,29 +27,29 @@ export const EventTrigger = defineNode({
 
   executor: ({ getInput, setOutput, emitEvent, next }) => {
     const eventName = (getInput<string>('event') ?? '').trim()
-    if (!eventName) throw new Error(localize('Event Emit requires an event name', '事件触发需要配置事件名'))
+    if (!eventName) throw new Error(localize('Emit Event requires an event name', '发送事件需要配置事件名'))
     const payload = getInput('payload')
     emitEvent(eventName, payload)
-    // Also pass event data downstream so the trigger node can join an ordinary execution chain.
+    // Also pass event data downstream so the emitter can join an ordinary execution chain.
     setOutput('payload', payload)
     next()
   },
 })
 
 /**
- * Event Listen: has no execution entry and subscribes to business events through lifecycle hooks at session start.
+ * On Event: has no execution entry and subscribes to business events through lifecycle hooks at session start.
  * Each event maps to a separate task; the handler writes outputs with that task's context and advances downstream.
  */
-export const EventListener = defineNode({
+export const OnEvent = defineNode({
   get definition() {
     return {
       executionMode: 'source' as const,
-      name: localize('Event Listen', '事件监听'),
-      inputs: [{ name: 'event', type: 'string', label: localize('Listen event', '监听事件') }] as const,
+      name: localize('On Event', '监听事件'),
+      inputs: [{ name: 'event', type: 'string', label: localize('Event', '事件') }] as const,
       outputs: [
         { name: 'exec', type: 'exec' },
-        { name: 'payload', type: 'any', label: localize('Event data', '事件数据') },
-        { name: 'count', type: 'number', label: localize('Received count', '收到次数') },
+        { name: 'payload', type: 'any', label: localize('Payload', '数据') },
+        { name: 'count', type: 'number', label: localize('Count', '次数') },
       ] as const,
       style,
     } as const

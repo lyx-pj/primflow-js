@@ -1,40 +1,27 @@
 import { defineNode } from '@lyx-pj/primflow-model'
 import { localize } from '../i18n'
+import { headerStyle } from './theme'
 
-export const IF = defineNode({
+export const If = defineNode({
   get definition() {
     return {
-      kind: 'default',
-      name: localize('Condition', '条件分支'),
+      name: localize('If', '条件分支'),
       inputs: [
         { name: 'exec', type: 'exec' },
         { name: 'condition', type: 'boolean', label: localize('Condition', '条件') },
       ] as const,
       outputs: [
-        { name: 'true', type: 'exec', label: localize('True', '满足') },
+        { name: 'true', type: 'exec', label: localize('True', '是') },
+        { name: 'false', type: 'exec', label: localize('False', '否') },
         { name: 'condition', type: 'boolean', label: localize('Condition', '条件') },
-        { name: 'false', type: 'exec', label: localize('False', '不满足') },
       ] as const,
-      style: {
-        header: { background: '#297964', color: '#fff' },
-        ports: {
-          input: {
-            editor: {
-              box: { width: 80 },
-            },
-          },
-        },
-      },
+      style: headerStyle('flow'),
     } as const
   },
 
-  executor: ({ getInput, next, setOutput }) => {
+  executor: ({ getInput, setOutput, next }) => {
     const condition = Boolean(getInput('condition'))
     setOutput('condition', condition)
-    if (condition) {
-      return next(['true'])
-    } else {
-      return next(['false'])
-    }
+    return next([condition ? 'true' : 'false'])
   },
 })

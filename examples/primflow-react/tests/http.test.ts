@@ -17,7 +17,7 @@ test('HTTP 节点通过服务发出 GET，并把 JSON 和状态码交给后续�
   vi.spyOn(console, 'log').mockImplementation(() => {})
   const instance = createEngine(
     [node('start'), node('HttpRequest', 'http', { url }), node('Print', 'print')],
-    [link('start', 'start', 'http'), link('http', 'done', 'print'), link('http', 'body', 'print', 'message')],
+    [link('start', 'start', 'http'), link('http', 'success', 'print'), link('http', 'body', 'print', 'value')],
   )
 
   await instance.start()
@@ -26,7 +26,7 @@ test('HTTP 节点通过服务发出 GET，并把 JSON 和状态码交给后续�
     method: 'GET', body: undefined, signal: expect.any(AbortSignal),
   }))
   expect(instance.getNodeExecutionData('http')?.outputs).toEqual({ status: 200, body: payload })
-  expect(instance.getNodeExecutionData('print')?.outputs.result).toEqual(payload)
+  expect(instance.getNodeExecutionData('print')?.outputs.value).toEqual(payload)
 })
 
 test('HTTP 节点发送 JSON 请求体，在非 2xx 响应时输出状态码和文本并走失败分支', async () => {
@@ -39,7 +39,7 @@ test('HTTP 节点发送 JSON 请求体，在非 2xx 响应时输出状态码和�
   const instance = createEngine(
     [node('start'), node('HttpRequest', 'http', { url, method: 'POST', body }),
       node('Print', 'success'), node('Print', 'failure')],
-    [link('start', 'start', 'http'), link('http', 'done', 'success'), link('http', 'error', 'failure')],
+    [link('start', 'start', 'http'), link('http', 'success', 'success'), link('http', 'error', 'failure')],
   )
 
   await instance.start()
@@ -78,7 +78,7 @@ test('请求地址协议非法时走错误分支并报告原因', async () => {
   const instance = createEngine(
     [node('start'), node('HttpRequest', 'http', { url: 'data:text/plain,example' }),
       node('Print', 'success'), node('Print', 'failure')],
-    [link('start', 'start', 'http'), link('http', 'done', 'success'), link('http', 'error', 'failure')],
+    [link('start', 'start', 'http'), link('http', 'success', 'success'), link('http', 'error', 'failure')],
   )
 
   await instance.start()
@@ -96,7 +96,7 @@ test('HTTP 网络故障走错误分支并报告失败原因', async () => {
   const instance = createEngine(
     [node('start'), node('HttpRequest', 'http', { url }),
       node('Print', 'success'), node('Print', 'failure')],
-    [link('start', 'start', 'http'), link('http', 'done', 'success'), link('http', 'error', 'failure')],
+    [link('start', 'start', 'http'), link('http', 'success', 'success'), link('http', 'error', 'failure')],
   )
 
   await instance.start()

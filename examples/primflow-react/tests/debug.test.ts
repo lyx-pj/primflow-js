@@ -185,7 +185,7 @@ test('重试失败的原因来自引擎的尝试记录', async () => {
   vi.useFakeTimers()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const engine = createEngine(
-    [node('start'), node('GetVariable', 'get', { name: 'status' }), node('CheckString', 'check', { expected: 'ready' })],
+    [node('start'), node('GetVariable', 'get', { name: 'status' }), node('CheckText', 'check', { expected: 'ready' })],
     [link('start', 'start', 'check', 'exec'), link('get', 'value', 'check', 'value')],
   )
   const run = engine.start({ retry: { initialIntervalMs: 200, jitter: false, timeoutMs: 1_000 } })

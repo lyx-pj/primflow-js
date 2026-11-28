@@ -26,5 +26,5 @@ export const httpExecutor = defineExecutor(HttpRequest, async ({ getInput, setOu
   }
   setOutput('status', response.status)
   setOutput('body', response.body)
-  return next([response.ok ? 'done' : 'error'])
+  return next([response.ok ? 'success' : 'error'])
 }, { services: [httpService] })
