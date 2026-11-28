@@ -111,14 +111,3 @@ engine.on('loop:finished', (taskId, invocation) => {})
 查询返回副本。每任务默认保留最近 100 个已结束轮次，正在执行的轮次会保留；清理轮次记录不影响最终结果。同时执行多个循环时，用 `frameId` 指定要查看的那一轮；按原 `nodeId` 查询提供聚合状态及最近完成数据。`getLoopInvocations` 的 `reason` 为 `break`（循环体决定结束）或 `limit`（撞到轮数上限）。
 
 通过[执行日志](execution-trace.zh-CN.md)可以用循环调用的 `activationId` 定位调用节点，再按 `frameId` 查某一轮内的逐次执行结果。执行日志与轮次记录有各自的保留上限。
-
-## 代码和测试
-
-执行逻辑见 [LoopController.ts](../src/LoopController.ts)，图结构检查见 [LoopValidation.ts](../src/LoopValidation.ts)。
-
-- [loops.test.ts](../tests/loops.test.ts)：一轮一轮的执行、跨轮的值、数据隔离、等待异步工作、限额、停止和查询。
-- [engine.test.ts](../tests/engine.test.ts)：调度、依赖和普通子图参数。
-
-```sh
-pnpm --filter @lyx-pj/primflow-engine exec vitest run tests/loops.test.ts
-```

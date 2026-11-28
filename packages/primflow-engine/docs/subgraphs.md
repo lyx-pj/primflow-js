@@ -21,7 +21,7 @@ Pairing also follows these rules:
 - `exec` and `spacer` do not carry parameters.
 - Unmatched parameters are skipped without interrupting execution.
 
-Results from the subgraph's `End` are written to the parent subgraph node's outputs before downstream parent nodes execute. See [SubgraphParams.ts](../src/SubgraphParams.ts).
+Results from the subgraph's `End` are written to the parent subgraph node's outputs before downstream parent nodes execute.
 
 ## Calls inside loop bodies
 
@@ -31,18 +31,8 @@ Ordinary subgraphs called from loop bodies use the same parameter rules, and the
 
 The engine does not read browser storage; it accepts a complete, prepared graph. Before execution, the application must load all referenced standalone subgraph files, including files referenced inside subgraphs. Missing files or circular references must block startup in the application.
 
-The storage structure of standalone subgraphs differs from the engine's embedded execution graph. The application must not write recursively assembled runtime graphs back to source files. See the [example's internal workflow module](../../../examples/primflow-react/packages/workflow/README.md) for assembly and file handling, and [canvas subgraphs and navigation](../../primflow-canvas/docs/subgraphs.md) for entering and returning.
+The storage structure of standalone subgraphs differs from the engine's embedded execution graph. The application must not write recursively assembled runtime graphs back to source files. See [canvas subgraphs and navigation](../../primflow-canvas/docs/subgraphs.md) for entering and returning.
 
 ## Limitations
 
 Parameter ports are configured through node `inputs` / `outputs`; there is no visual port editor. Mismatched parameters are skipped without a dedicated UI error message.
-
-## Code and tests
-
-- [SubgraphParams.ts](../src/SubgraphParams.ts): parameter input and result output.
-- [engine.test.ts](../tests/engine.test.ts): passing parameters, returning results, pairing by name or by the single remaining port.
-- [subgraphs.test.ts](../../../examples/primflow-react/tests/subgraphs.test.ts): loading references, detecting missing files and circular references.
-
-```sh
-pnpm --filter @lyx-pj/primflow-engine exec vitest run tests/engine.test.ts
-```

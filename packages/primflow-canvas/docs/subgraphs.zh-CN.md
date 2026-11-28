@@ -42,13 +42,7 @@ graph.setOptions({
 
 ## 容器卡片与预览（子图 / 循环）
 
-子图调用节点显示为固定卡片：展开 280×180，折叠 200×56。标题栏使用蓝色渐变底、24px 的 chevron 按钮和浅色 12px 标题，并用 1px 强调色边线与预览区分开；展开和折叠状态都保持按钮和标题在卡片顶部；折叠时卡片主体变为半透明，让画布网格透出来，可通过 `--bpgraph-container-collapsed-body-opacity` 调整透明度（旧的 `--bpgraph-subgraph-collapsed-body-opacity` 仍兼容）；标题栏可通过 `--bpgraph-subgraph-header-bg`、`--bpgraph-subgraph-header-fg` 和 `--bpgraph-subgraph-header-border` 调整配色。左上角按钮切换状态，状态保存在 `JsonNode.collapsed`；切换会发出普通变更事件供自动保存，但不进入撤销记录。回溯期间折叠按钮不可用，预览使用回溯 JSON。预览是现场渲染：画布在隐藏 paper 中渲染目标子图，再把 DOM 克隆进卡片，因此自定义节点渲染器、端口、内联端口控件和连线保持画布外观。断点、执行状态、选中、网格和面板不进入预览，预览容器不可交互。
-
-Loop 节点复用同一套卡片尺寸、端口和折叠逻辑，header 使用紫色渐变、圆形箭头图标和可选的循环上限徽标；卡片上隐藏端口标签，完整标签仍在节点面板显示。Loop 的主题变量为 `--bpgraph-loop-header-bg`、`--bpgraph-loop-header-fg`、`--bpgraph-loop-header-border` 和 `--bpgraph-loop-preview-bg`，卡片根节点带 `data-container-card="loop"`。应用注册的 `loop` renderer 仍优先于内置卡片。
-
-卡片的四个端口使用紧凑样式：执行端口保持中性箭头，通用数据端口使用默认的青灰色六边形，视觉半径为 4、描边 1px，端口中心正好落在卡片边缘线上，因此一半在卡片内、一半在卡片外。折叠时同侧两个端口中心相距 24px，不会互相重叠。
-
-预览区是标题条下方的深色内嵌画布，带细点阵、内描边，并给内置节点主体加了一圈微光描边，因此深色主题下内部节点也能和卡片背景区分开。可通过 `--bpgraph-subgraph-preview-bg` 调整底色。连线颜色来自节点注册表或单条连线配置，未配置时使用画布默认值。
+子图和 `loop` 调用节点默认显示为可折叠的预览卡片，折叠状态保存在 `JsonNode.collapsed`（不进入撤销记录）。回溯期间折叠不可用，预览使用回溯 JSON。应用为 `loop` 或 `subgraph` 注册的自定义渲染器优先于内置卡片。
 
 预览不会递归。预览里的子图调用和 Loop 调用都画成通用卡，保留标题、标记、端口和随折叠态变化的尺寸；Loop 通用卡带 `Loop` 徽标。
 
@@ -88,12 +82,3 @@ await graph.preloadSubgraphPreviews()
 ## 容器节点的面板
 
 节点面板由工具栏按钮控制，默认打开；选中容器节点（内嵌子图与外部子图引用）不会自动弹出面板。面板已经打开时，选中容器节点会显示它的设置；双击进入子图或循环体后，面板保持打开并回到视图总览，直到在新视图中选中节点。外部子图异步切换失败时，面板不依赖加载结果，保持当前内容。
-
-## 测试
-
-- [startNodes.test.ts](../tests/startNodes.test.ts)：内嵌子图创建、Start 端口保留、保存加载。
-- [viewport.test.ts](../tests/viewport.test.ts)、[ui.test.ts](../tests/ui.test.ts)：返回导航、菜单与面板交互。
-- [replay.test.ts](../tests/replay.test.ts)：回溯期间禁止导航、退出后恢复编辑图。
-- [subgraphCard.test.ts](../tests/subgraphCard.test.ts)、[loopCard.test.ts](../tests/loopCard.test.ts)、[previewGraph.test.ts](../tests/previewGraph.test.ts)、[renderThumbnail.test.ts](../tests/renderThumbnail.test.ts)：卡片、折叠状态、Loop 变体、预览截断和缩略图 API。
-- [previewCache.test.ts](../tests/previewCache.test.ts)、[subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts)、[regionSchematic.test.ts](../tests/regionSchematic.test.ts)：缓存 key、持久化数据校验、内嵌区域首帧示意图、缓存即时挂载和后台校验。
-- `examples/primflow-react/e2e/subgraphPreview.e2e.ts`、`examples/primflow-react/e2e/loopCard.e2e.ts`：现场预览、自定义渲染器、端口控件、嵌套通用卡、折叠持久化和刷新后的缓存预览。

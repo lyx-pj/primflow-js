@@ -45,7 +45,7 @@ A subgraph call node can persist its card's collapsed presentation as `JsonNode.
 | Standalone subgraph opened as a file | The application calls `graph.fromJSON` with `keepStartPorts: true` to preserve parameter ports |
 | Loop body | Uses `LoopEntry`, not `Start` |
 
-By default, `normalizeStartNodes` keeps only execution outputs and removes links to ports that no longer exist. With `keepDataPorts: true`, it preserves explicitly defined data ports. The main graph's `Start` only triggers execution; it does not automatically receive startup business data. See [normalizeStartNodes.ts](../src/shared/normalizeStartNodes.ts). The engine uses `keepDataPorts: true` when loading embedded subgraphs; the canvas exposes it as `fromJSON(json, { keepStartPorts })`.
+By default, `normalizeStartNodes` keeps only execution outputs and removes links to ports that no longer exist. With `keepDataPorts: true`, it preserves explicitly defined data ports. The main graph's `Start` only triggers execution; it does not automatically receive startup business data. The engine uses `keepDataPorts: true` when loading embedded subgraphs; the canvas exposes it as `fromJSON(json, { keepStartPorts })`.
 
 Normalization clears `Start.inputValues` and uses stable execution output IDs, defaulting to `out-start`. The main graph has no parameter source and keeps the default behavior; only subgraph entries preserve parameters.
 

@@ -12,7 +12,7 @@ This document describes loop ports, configuration, and body structure. See [engi
 | `LoopEntry` | `loop-entry` | None | Execution `exec`, data `value` and `initialValue` |
 | `LoopReturn` | `loop-return` | Data `value`, execution `next` / `break` | None |
 
-Port IDs use the `in-` / `out-` prefixes, such as `in-input` and `out-value`. Definitions are in [Loop.ts](../src/builtin/nodes/Loop.ts). A loop exposes one execution input and one data input. Iteration numbers and completion reasons are internal engine information, not ports.
+Port IDs use the `in-` / `out-` prefixes, such as `in-input` and `out-value`. A loop exposes one execution input and one data input. Iteration numbers and completion reasons are internal engine information, not ports.
 
 Loops have one form: the body runs repeatedly and decides when to stop. Nodes inside the body implement collection traversal, counting, and other uses; the engine does not distinguish modes.
 

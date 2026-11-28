@@ -21,7 +21,7 @@
 - `exec` 和 `spacer` 不传递参数。
 - 无法匹配的参数跳过，不会因此中断执行。
 
-子图 `End` 的结果先写入父图子图节点的输出，再执行父图的后续节点。实现见 [SubgraphParams.ts](../src/SubgraphParams.ts)。
+子图 `End` 的结果先写入父图子图节点的输出，再执行父图的后续节点。
 
 ## 循环体内调用
 
@@ -31,18 +31,8 @@
 
 引擎不读取浏览器存储，只接收已经准备好的完整图。执行前，应用需要加载所有被引用的独立子图文件（包括子图内部引用的文件），再交给引擎；文件缺失或相互循环引用时由应用阻止启动。
 
-独立子图的保存结构与引擎的内嵌执行图不同：应用不要把运行时的递归组装结果写回源文件。示例的组装与文件流程见 [示例内部 workflow 模块](../../../examples/primflow-react/packages/workflow/README.zh-CN.md)，画布进入与返回见 [canvas 子图与导航](../../primflow-canvas/docs/subgraphs.zh-CN.md)。
+独立子图的保存结构与引擎的内嵌执行图不同：应用不要把运行时的递归组装结果写回源文件。画布进入与返回见 [canvas 子图与导航](../../primflow-canvas/docs/subgraphs.zh-CN.md)。
 
 ## 限制
 
 参数端口通过节点的 `inputs` / `outputs` 配置，没有可视化端口编辑；参数不匹配时跳过，没有专门的界面错误提示。
-
-## 代码和测试
-
-- [SubgraphParams.ts](../src/SubgraphParams.ts)：子图参数的传入和返回。
-- [engine.test.ts](../tests/engine.test.ts)：参数传入、结果返回、按名称或剩余单个端口配对。
-- [subgraphs.test.ts](../../../examples/primflow-react/tests/subgraphs.test.ts)：加载引用文件，检查缺失文件与循环引用。
-
-```sh
-pnpm --filter @lyx-pj/primflow-engine exec vitest run tests/engine.test.ts
-```

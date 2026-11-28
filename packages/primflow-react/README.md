@@ -109,25 +109,7 @@ The application connects them: read `graph.toJSON()`, assemble standalone subgra
 - The engine factory creates and configures an engine for the Provider. Start the engine in application code after mounting. Use `graph.setOptions()` to update canvas options.
 - `GraphView` passes view options to the mounting process; changing a prop does not guarantee instance reconstruction.
 
-`GraphView` supports callbacks such as `onNodeClick`, `onNodeDoubleClick`, `onNodeSelection`, and `onBlankClick`. See [GraphViewProps](src/components/graph-view/graph-view.tsx) for all props. Use Graph APIs for port and canvas interactions without manipulating JointJS directly.
-
-## Build
-
-Consumers install canvas, engine, and React. This package keeps them external during bundling to avoid duplicate node classes.
-
-`pnpm build` checks package boundaries. See [React integration](docs/adapter-contract.md) for the rules and [verify-boundaries.mjs](../../scripts/verify-boundaries.mjs) for the checks.
-
-## Development and tests
-
-Run from the repository root:
-
-```sh
-pnpm --filter @lyx-pj/primflow-react test
-pnpm --filter @lyx-pj/primflow-react typecheck
-pnpm --filter @lyx-pj/primflow-react lint
-```
-
-The existing [index.test.ts](tests/index.test.ts) covers instance stability in Strict Mode and engine cleanup on unmount. Add corresponding tests for new interactions. Run the root `pnpm build` when changing bundling or public exports.
+`GraphView` supports callbacks such as `onNodeClick`, `onNodeDoubleClick`, `onNodeSelection`, and `onBlankClick`. See [GraphViewProps](src/components/graph-view/graph-view.tsx) for all props. Use Graph APIs for port and canvas interactions.
 
 ## License
 

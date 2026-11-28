@@ -107,25 +107,7 @@ export const { EngineProvider, useEngine } = createEngineContext(() => new Engin
 - 工厂函数为 Provider 创建和配置引擎。挂载后由应用启动引擎，画布选项通过 `graph.setOptions()` 更新。
 - `GraphView` 的视图选项交给挂载流程，不保证修改 prop 就自动重建实例。
 
-`GraphView` 支持 `onNodeClick`、`onNodeDoubleClick`、`onNodeSelection`、`onBlankClick` 等回调，完整属性见 [GraphViewProps](src/components/graph-view/graph-view.tsx)。端口和画布交互通过 Graph 的 API 使用，不需要直接操作 JointJS。
-
-## 构建
-
-canvas、engine 和 React 由使用方安装。这个包构建时不会把它们打包进来，避免出现两份节点类。
-
-运行 `pnpm build` 会检查包之间的依赖是否符合要求，规则见 [React 接入](docs/adapter-contract.zh-CN.md)，检查脚本见 [verify-boundaries.mjs](../../scripts/verify-boundaries.mjs)。
-
-## 开发与测试
-
-从仓库根运行：
-
-```sh
-pnpm --filter @lyx-pj/primflow-react test
-pnpm --filter @lyx-pj/primflow-react typecheck
-pnpm --filter @lyx-pj/primflow-react lint
-```
-
-现有 [index.test.ts](tests/index.test.ts) 覆盖严格模式下的实例稳定性和卸载后的引擎清理；新增交互需要补充对应测试。打包或公开导出变化时运行根 `pnpm build`。
+`GraphView` 支持 `onNodeClick`、`onNodeDoubleClick`、`onNodeSelection`、`onBlankClick` 等回调，完整属性见 [GraphViewProps](src/components/graph-view/graph-view.tsx)。端口和画布交互通过 Graph 的 API 使用。
 
 ## 许可
 

@@ -45,7 +45,7 @@ type JsonGraph = {
 | 独立子图文件作为文件打开 | 应用以 `keepStartPorts: true` 调用 `graph.fromJSON`，保留参数端口 |
 | 循环体 | 不使用 `Start`，入口是 `LoopEntry` |
 
-`normalizeStartNodes` 默认只保留执行输出，并过滤掉不再存在的端口上的连线；传入 `keepDataPorts: true` 时保留显式定义的数据端口。主图 `Start` 只有执行入口语义，不自动承接启动业务数据。实现见 [normalizeStartNodes.ts](../src/shared/normalizeStartNodes.ts)。引擎在加载内嵌子图时使用 `keepDataPorts: true`；画布把该选项暴露为 `fromJSON(json, { keepStartPorts })`。
+`normalizeStartNodes` 默认只保留执行输出，并过滤掉不再存在的端口上的连线；传入 `keepDataPorts: true` 时保留显式定义的数据端口。主图 `Start` 只有执行入口语义，不自动承接启动业务数据。引擎在加载内嵌子图时使用 `keepDataPorts: true`；画布把该选项暴露为 `fromJSON(json, { keepStartPorts })`。
 
 标准化会清空 `Start` 的 `inputValues`，并给执行出口使用稳定 id（缺省为 `out-start`）。主图没有参数来源，保持默认；只有子图入口保留参数。
 

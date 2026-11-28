@@ -42,13 +42,7 @@ The application saves edits, handles asynchronous switching failures, and refres
 
 ## Container cards and previews (subgraph / loop)
 
-A subgraph call node renders as a fixed card: 280×180 expanded or 200×56 collapsed. The header uses a blue-tinted bar, a 24px chevron button, and a light 12px title, with a 1px accent border above the preview. The button and title stay on the top edge in both states. When collapsed, the card body becomes translucent so the canvas grid remains visible; override `--bpgraph-container-collapsed-body-opacity` to change it (the older `--bpgraph-subgraph-collapsed-body-opacity` still works). Override `--bpgraph-subgraph-header-bg`, `--bpgraph-subgraph-header-fg`, and `--bpgraph-subgraph-header-border` to retheme the header. The top-left control toggles the state, which is persisted as `JsonNode.collapsed`; toggling raises a normal change event for autosave but does not add an undo entry. During replay the toggle is disabled and previews use the replay JSON. Previews are live: the canvas renders the target subgraph in a hidden paper and clones its DOM into the card, so custom node renderers, ports, inline port controls, and links keep their canvas appearance. Breakpoints, execution states, selection, the grid, and panels are excluded, and the preview container is inert.
-
-A loop node reuses the same card size, port layout, and collapse behavior. Its header uses a violet tint, a circular-arrow glyph, and an optional limit chip; port labels are hidden on the card and remain available in the node panel. Retheme it with `--bpgraph-loop-header-bg`, `--bpgraph-loop-header-fg`, and `--bpgraph-loop-header-border`, or the preview surface with `--bpgraph-loop-preview-bg`. The card root exposes `data-container-card="loop"`. An application renderer registered for `loop` still overrides the built-in card.
-
-The four card ports are compact: execution ports keep the neutral arrow, generic data ports use the default slate hexagon, the visual radius is 4 with a 1px outline, and each port centre sits on the card edge so half the dot stays outside. On the collapsed card, the two ports on each side sit 24px apart instead of overlapping.
-
-The preview surface is a darker inset canvas below the title strip, with a faint dot grid, an inner ring, and a subtle rim on built-in node bodies, so inner nodes stay distinct from the card body without leaving a dark theme. Override `--bpgraph-subgraph-preview-bg` to change the base color. Link colors come from the node registry or per link, with the canvas default as fallback.
+Subgraph and `loop` call nodes render as collapsible preview cards by default. The collapsed state is persisted as `JsonNode.collapsed` (not part of undo history). During replay the toggle is disabled and previews use the replay JSON. An application renderer registered for `loop` or `subgraph` overrides the built-in card.
 
 Previews never recurse. A subgraph call or loop call inside a preview is drawn as a generic card with its title, badge, ports, and collapse-aware size; a nested loop uses the generic loop card with a `Loop` badge.
 
@@ -88,12 +82,3 @@ A preview draws at most 200 nodes and 400 links in reading order; dangling links
 ## Container node panels
 
 The toolbar button controls the node panel, which starts open, and selecting a container node, whether an embedded subgraph or external reference, does not open it automatically. If the panel is already open, selecting a container shows its settings. Double-clicking into a subgraph or loop body keeps the panel open and returns it to the graph overview until a node is selected in the new view. External subgraph loading does not control the panel, so a failed asynchronous switch leaves the current content in place.
-
-## Tests
-
-- [startNodes.test.ts](../tests/startNodes.test.ts): embedded creation, Start port preservation, saving and loading.
-- [viewport.test.ts](../tests/viewport.test.ts), [ui.test.ts](../tests/ui.test.ts): back navigation, menus, and panel interactions.
-- [replay.test.ts](../tests/replay.test.ts): disabled navigation during replay and editing graph restoration on exit.
-- [subgraphCard.test.ts](../tests/subgraphCard.test.ts), [loopCard.test.ts](../tests/loopCard.test.ts), [previewGraph.test.ts](../tests/previewGraph.test.ts), [renderThumbnail.test.ts](../tests/renderThumbnail.test.ts): card shell, collapsed state, loop variant, preview selection, and the thumbnail API.
-- [previewCache.test.ts](../tests/previewCache.test.ts), [subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts), [regionSchematic.test.ts](../tests/regionSchematic.test.ts): cache keys, persisted payload validation, embedded first-frame schematics, instant cache mounts, and background revalidation.
-- `examples/primflow-react/e2e/subgraphPreview.e2e.ts`, `examples/primflow-react/e2e/loopCard.e2e.ts`: live preview, custom renderers, port controls, nested generic cards, collapse persistence, and cached previews after reload.

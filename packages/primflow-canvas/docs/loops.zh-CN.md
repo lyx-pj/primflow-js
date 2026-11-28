@@ -28,7 +28,7 @@ Loop 节点使用与子图调用相同的容器卡片：展开 280×180，折叠
 
 缩略图直接读取当前视图里的循环体：预览在隐藏 paper 中现场渲染 `LoopEntry`、`LoopReturn`、业务节点和连线，再克隆进卡片。预览不递归，循环体里的 Loop 或子图调用显示为通用卡。折叠、执行状态、断点标记和自定义节点渲染器的规则与子图卡片一致。
 
-Loop 不使用应用层持久化缩略图缓存：循环体和视图在同一个 JSON 里，持久化只是重复保存派生 SVG。内嵌区域在冷启动、没有内存缓存时先同步绘制结构示意图（最多 80 节点/160 连线，`data-preview-state="schematic"`），随后替换为高清预览；内存缓存继续用于视图切换和折叠展开。主题变量为 `--bpgraph-loop-header-bg`、`--bpgraph-loop-header-fg`、`--bpgraph-loop-header-border` 和 `--bpgraph-loop-preview-bg`；卡片根节点带 `data-container-card="loop"`。应用为 `loop` 注册的 renderer 仍优先于内置卡片。
+Loop 不使用应用层持久化缩略图缓存；内嵌区域使用内存缓存。应用为 `loop` 注册的自定义渲染器优先于内置卡片。
 
 ## 保存和加载
 
@@ -41,9 +41,3 @@ Loop 不使用应用层持久化缩略图缓存：循环体和视图在同一个
 
 - 画布没有轮次面板；轮次、结束原因和每轮数据通过引擎查询 API 查看，展示由应用决定。
 - 执行光晕、断点、执行日志和回溯属于通用画布能力，见 [canvas README](../README.zh-CN.md)。
-
-## 测试
-
-[startNodes.test.ts](../tests/startNodes.test.ts) 覆盖循环体创建、嵌套、保存加载、删除、`isLoopBody` 判断，以及入口与返回节点的删除保护。
-
-[loopCard.test.ts](../tests/loopCard.test.ts) 覆盖 Loop 卡片尺寸、折叠、上限徽标、回溯禁用和通用占位卡；[subgraphPreviewManager.test.ts](../tests/subgraphPreviewManager.test.ts) 与 [regionSchematic.test.ts](../tests/regionSchematic.test.ts) 覆盖内嵌区域首帧和 Loop 不写应用缓存。浏览器回归见 `examples/primflow-react/e2e/loopCard.e2e.ts`。

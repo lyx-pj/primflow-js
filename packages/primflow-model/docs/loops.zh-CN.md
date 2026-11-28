@@ -12,7 +12,7 @@
 | `LoopEntry` | `loop-entry` | 无 | 执行 `exec`、数据 `value` 和 `initialValue` |
 | `LoopReturn` | `loop-return` | 数据 `value`、执行 `next` / `break` | 无 |
 
-端口 ID 使用 `in-` / `out-` 前缀（如 `in-input`、`out-value`），定义见 [Loop.ts](../src/builtin/nodes/Loop.ts)。循环对外只有一个执行入口和一个数据入口；轮次、结束原因是引擎内部信息，不占用端口。
+端口 ID 使用 `in-` / `out-` 前缀（如 `in-input`、`out-value`）。循环对外只有一个执行入口和一个数据入口；轮次、结束原因是引擎内部信息，不占用端口。
 
 循环只有一种形态：循环体反复执行，什么时候结束由循环体自己决定；遍历、计数等具体玩法由循环体里的节点实现，引擎不区分模式。
 

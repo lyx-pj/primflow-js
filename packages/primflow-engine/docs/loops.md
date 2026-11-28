@@ -111,14 +111,3 @@ engine.on('loop:finished', (taskId, invocation) => {})
 Queries return copies. Each task retains the latest 100 finished iterations by default, plus active iterations. Evicting iteration records does not affect the final result. Use `frameId` to select a specific iteration when multiple loops run concurrently. Queries by the original `nodeId` provide aggregated status and the latest completed data. `getLoopInvocations` reports `reason` as `break` when the body decides to end, or `limit` when the iteration limit is reached.
 
 Use the [execution log](execution-trace.md) to link an invocation's `activationId` to its caller and inspect individual node outcomes by `frameId`. Trace and iteration records have independent retention limits.
-
-## Code and tests
-
-Execution logic is in [LoopController.ts](../src/LoopController.ts), and graph structure validation is in [LoopValidation.ts](../src/LoopValidation.ts).
-
-- [loops.test.ts](../tests/loops.test.ts): iteration execution, values between iterations, data isolation, awaiting asynchronous work, limits, stopping, and queries.
-- [engine.test.ts](../tests/engine.test.ts): scheduling, dependencies, and ordinary subgraph parameters.
-
-```sh
-pnpm --filter @lyx-pj/primflow-engine exec vitest run tests/loops.test.ts
-```
