@@ -1,5 +1,17 @@
 # @lyx-pj/primflow-react
 
+## 3.0.0
+
+### Minor Changes
+
+- Modernize canvas UI with overlay primitives, slot system, and improved JointJS link routing, and add React mount utilities (`createReactMount`, `createReactSlot`, `useReactMount`, and `CanvasPortalHost`) for rendering React components inside canvas slots.
+
+### Patch Changes
+
+- Updated dependencies
+  - @lyx-pj/primflow-canvas@3.0.0
+  - @lyx-pj/primflow-engine@3.0.0
+
 ## 2.0.1
 
 ### Patch Changes

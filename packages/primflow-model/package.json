@@ -1,6 +1,6 @@
 {
   "name": "@lyx-pj/primflow-model",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": false,
   "description": "Shared node, port, variable and graph JSON model for Primflow, with no external dependencies.",
   "type": "module",

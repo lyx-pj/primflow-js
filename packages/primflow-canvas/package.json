@@ -1,6 +1,6 @@
 {
   "name": "@lyx-pj/primflow-canvas",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": false,
   "description": "Web canvas for editing and displaying Primflow graphs and execution results.",
   "type": "module",

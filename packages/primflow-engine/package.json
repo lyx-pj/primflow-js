@@ -1,6 +1,6 @@
 {
   "name": "@lyx-pj/primflow-engine",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": false,
   "description": "Environment-agnostic workflow execution engine for Primflow: runs graphs, manages events, tasks, loops and node lifecycles without DOM or host-specific APIs.",
   "type": "module",
