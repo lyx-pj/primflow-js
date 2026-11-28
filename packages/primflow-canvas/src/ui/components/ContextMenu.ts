@@ -1,7 +1,7 @@
 import { html, nothing } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
 import { createRef, ref } from 'lit-html/directives/ref.js'
-import type { CanvasGraph, ContextMenuContext, ContextMenuItem, ContextMenuOptions } from '../types'
+import type { CanvasGraph, ContextMenuContext, ContextMenuItem, ContextMenuOptions, ContextMenuSlotContext } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopEvent, stopWheel } from '../helpers'
@@ -39,6 +39,10 @@ export class ContextMenu extends OverlayComponent {
     if (this.state && !this.options()?.items) {
       this.state.items = this.defaultItems(this.state.context)
     }
+    this.render()
+  }
+
+  refresh() {
     this.render()
   }
 
@@ -83,18 +87,34 @@ export class ContextMenu extends OverlayComponent {
   close() {
     if (!this.state) return
     this.state = null
-    this.commit(nothing)
+    this.render()
   }
 
   private render() {
     const state = this.state
+    const slotContext: ContextMenuSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: Boolean(state),
+      point: state ? { ...state.point } : { x: 0, y: 0 },
+      context: state?.context ?? null,
+      items: state?.items ?? [],
+      runItem: (item) => this.run(item),
+      close: () => this.close(),
+    }
+    if (this.syncSlot(this.graph.options.ui?.contextMenu, slotContext)) {
+      return
+    }
     if (!state) {
       this.commit(nothing)
       return
     }
     this.commit(html`
-      <div
+      <pf-surface
         ${ref(this.menuRef)}
+        variant="menu"
+        elevated
         class="bpgraph-menu bpgraph-context"
         aria-label=${this.t('Context menu')}
         style=${styleMap({
@@ -112,7 +132,7 @@ export class ContextMenu extends OverlayComponent {
         ${state.items.map(
           (item, index) => html`
             ${index > 0 && item.separatorBefore
-              ? html`<div class="bpgraph-context-separator" role="separator"></div>`
+              ? html`<pf-divider class="bpgraph-context-separator" role="separator"></pf-divider>`
               : nothing}
             <button
               type="button"
@@ -133,7 +153,7 @@ export class ContextMenu extends OverlayComponent {
             </button>
           `
         )}
-      </div>
+      </pf-surface>
     `)
   }
 

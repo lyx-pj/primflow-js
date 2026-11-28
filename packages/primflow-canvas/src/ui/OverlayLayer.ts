@@ -1,5 +1,7 @@
 import { nothing, render, type TemplateResult } from 'lit-html'
+import { registerPrimitives } from './primitives'
 import { ensureUiStyles } from './styles'
+import type { CanvasTheme } from './types'
 
 /**
  * Native events intercepted at the overlay root.
@@ -23,7 +25,8 @@ export class OverlayLayer {
   private readonly previousPosition: string
   private disposed = false
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, theme: CanvasTheme = 'dark') {
+    registerPrimitives()
     ensureUiStyles()
     this.container = container
     this.previousPosition = container.style.position
@@ -32,10 +35,22 @@ export class OverlayLayer {
     }
     this.root = document.createElement('div')
     this.root.className = 'bpgraph-overlay'
+    this.setTheme(theme)
     for (const event of BUBBLING_EVENTS) {
       this.root.addEventListener(event, this.stopBubbling)
     }
     container.appendChild(this.root)
+  }
+
+  /** Apply a semantic visual theme token preset to the overlay and container. */
+  setTheme(theme: CanvasTheme = 'dark') {
+    const dark = theme !== 'light'
+    this.root.setAttribute('data-pf-theme', theme)
+    this.container.setAttribute('data-pf-theme', theme)
+    this.root.classList.toggle('sl-theme-dark', dark)
+    this.root.classList.toggle('sl-theme-light', !dark)
+    this.container.classList.toggle('sl-theme-dark', dark)
+    this.container.classList.toggle('sl-theme-light', !dark)
   }
 
   /** Menu interactions belong to the menu and must not bubble to the canvas. */

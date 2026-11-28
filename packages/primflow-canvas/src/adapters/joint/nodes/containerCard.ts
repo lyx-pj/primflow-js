@@ -134,7 +134,11 @@ export function createContainerCardRenderer(
   options: ContainerCardOptions,
 ): NodeRendererRegistration {
   let previewSlot: HTMLElement | null = null
-  const previewRef = (element: Element | undefined, target: NodeInstanceType) => {
+  let currentTarget: NodeInstanceType = instance
+  let attachedTargetId: string | undefined = instance.targetGraphId
+  // Keep a stable ref callback identity so Lit does not detach and re-attach
+  // the preview host (replacing the mounted SVG) on every card re-render.
+  const onPreviewRef = (element: Element | undefined) => {
     const host = previewHost(graph)
     if (!(element instanceof HTMLElement)) {
       if (previewSlot) host?.detach(previewSlot)
@@ -142,7 +146,8 @@ export function createContainerCardRenderer(
       return
     }
     previewSlot = element
-    host?.attach(element, target)
+    attachedTargetId = currentTarget.targetGraphId
+    host?.attach(element, currentTarget)
   }
   const registration: ContainerCardRegistration = {
     size: containerCardSize(instance.collapsed),
@@ -157,7 +162,12 @@ export function createContainerCardRenderer(
     }),
     render: ({ node }) => {
       const target = node ?? instance
+      currentTarget = target
       const collapsed = target.collapsed
+      if (!collapsed && previewSlot && previewSlot.isConnected && attachedTargetId !== target.targetGraphId) {
+        attachedTargetId = target.targetGraphId
+        previewHost(graph)?.attach(previewSlot, target)
+      }
       const language = languageOf(graph)
       const replaying = graph.isReplayMode()
       // The preview host owns its children imperatively; a Lit child part here
@@ -212,7 +222,7 @@ export function createContainerCardRenderer(
                 <div
                   class="bpgraph-subgraph-preview"
                   data-preview-state="pending"
-                  ${ref((element) => previewRef(element, target))}
+                  ${ref(onPreviewRef)}
                 ></div>
               `}
         </div>

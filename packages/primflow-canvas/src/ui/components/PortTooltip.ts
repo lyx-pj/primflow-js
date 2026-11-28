@@ -1,6 +1,8 @@
 import { html, nothing } from 'lit-html'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
+import type { CanvasGraph, PortTooltipSlotContext } from '../types'
+import { applyFloatingPosition } from '../primitives'
 
 /** Elements that identify one port on hover: its shape and its label. */
 const PORT_PIECE = '[data-port-type]'
@@ -20,22 +22,32 @@ const SHOW_DELAY = 300
 let nextTooltipId = 0
 
 /**
- * Tooltip for a node port.
+ * Floating tooltip for a node port.
  *
- * The port shape carries the display name and type as data attributes, so the
- * tooltip works for rebuilt ports and custom renderers without reading the
- * model. It renders in the canvas overlay instead of an SVG `foreignObject`, so
- * the card is not clipped by the node or the port box.
+ * Uses Floating UI positioning with synchronous clamp fallback and supports
+ * full external replacement via `GraphOptions.ui.portTooltip`.
  */
 export class PortTooltip extends OverlayComponent {
   private readonly id = `bpgraph-port-tooltip-${++nextTooltipId}`
+  private readonly graph?: CanvasGraph
   private hovered: Element | null = null
   private described: Element | null = null
   private timer?: ReturnType<typeof setTimeout>
   private pending: { anchor: Element; name: string; type: string; side: 'left' | 'right' } | null = null
+  private visibleState: { anchor: Element; name: string; type: string; side: 'left' | 'right' } | null = null
 
-  constructor(overlay: OverlayLayer) {
-    super(overlay, 'bpgraph-port-tooltip-layer')
+  constructor(overlay: OverlayLayer, graph?: CanvasGraph) {
+    super(overlay, 'bpgraph-port-tooltip-layer', () => graph?.options.language)
+    this.graph = graph
+  }
+
+  refresh() {
+    if (this.visibleState) {
+      const { anchor, name, type, side } = this.visibleState
+      this.show(anchor, name, type, side)
+    } else if (this.graph?.options.ui?.portTooltip !== undefined) {
+      this.syncExternal(false)
+    }
   }
 
   /** Show the tooltip for a pointer that entered `target`, if it is a port. */
@@ -54,12 +66,8 @@ export class PortTooltip extends OverlayComponent {
       return
     }
     this.hovered = port
-    // A label sits inside the node body; anchor the card to the port shape so
-    // both halves of the port show the tooltip in the same place.
     const anchor = port.querySelector('[data-port-kind]') ?? piece
     const direction = piece.getAttribute('data-port-direction')
-    // Drop a card left over from the previous port instead of showing it while
-    // the pointer is already somewhere else.
     this.clear()
     this.pending = { anchor, name, type, side: direction === 'out' ? 'right' : 'left' }
     this.schedule()
@@ -71,7 +79,6 @@ export class PortTooltip extends OverlayComponent {
     if (!piece) return
     const port = piece.closest('.bpgraph-port') ?? piece
     if (port !== this.hovered) return
-    // Sliding between the port shape and its label stays inside one port.
     if (relatedTarget && port.contains(relatedTarget)) return
     this.hide()
   }
@@ -80,6 +87,7 @@ export class PortTooltip extends OverlayComponent {
     this.cancelTimer()
     this.pending = null
     this.hovered = null
+    this.visibleState = null
     this.clear()
   }
 
@@ -106,22 +114,42 @@ export class PortTooltip extends OverlayComponent {
     this.timer = undefined
   }
 
+  private syncExternal(open: boolean): boolean {
+    if (!this.graph) return false
+    const slot = this.graph.options.ui?.portTooltip
+    const state = this.visibleState
+    const context: PortTooltipSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open,
+      name: state?.name ?? '',
+      type: state?.type ?? '',
+      side: state?.side ?? 'left',
+      anchor: state?.anchor ?? null,
+    }
+    return this.syncSlot(slot, context)
+  }
+
   /** Remove the rendered card and the accessibility link without touching hover state. */
   private clear() {
     if (this.described) {
       this.described.removeAttribute('aria-describedby')
       this.described = null
     }
+    if (this.syncExternal(false)) return
     if (this.host.childElementCount > 0) this.commit(nothing)
   }
 
   private show(anchor: Element, name: string, type: string, side: 'left' | 'right') {
     this.clear()
+    this.visibleState = { anchor, name, type, side }
+    if (this.syncExternal(true)) return
     this.commit(html`
-      <div id=${this.id} class="bpgraph-port-tooltip" role="tooltip">
+      <pf-surface variant="card" elevated id=${this.id} class="bpgraph-port-tooltip" role="tooltip">
         <span class="bpgraph-port-tooltip-name">${name}</span>
         <span class="bpgraph-port-tooltip-type">${type}</span>
-      </div>
+      </pf-surface>
     `)
     const card = this.host.querySelector<HTMLElement>('.bpgraph-port-tooltip')
     if (!card) return
@@ -132,7 +160,6 @@ export class PortTooltip extends OverlayComponent {
     const right = rect.right - bounds.left + GAP
     const left = rect.left - bounds.left - width - GAP
     let x = side === 'right' ? right : left
-    // Flip to the other side of the port when the preferred side lacks room.
     if (side === 'right' && x + width > bounds.width - MARGIN) x = left
     if (side === 'left' && x < MARGIN) x = right
     const y = rect.top - bounds.top + (rect.height - height) / 2
@@ -140,5 +167,13 @@ export class PortTooltip extends OverlayComponent {
     card.style.top = `${Math.max(MARGIN, Math.min(y, bounds.height - height - MARGIN))}px`
     anchor.setAttribute('aria-describedby', this.id)
     this.described = anchor
+    if (bounds.width > 0 && bounds.height > 0) {
+      void applyFloatingPosition(anchor, card, {
+        placement: side === 'right' ? 'right' : 'left',
+        offset: GAP,
+        padding: MARGIN,
+        boundary: this.overlay.root,
+      })
+    }
   }
 }

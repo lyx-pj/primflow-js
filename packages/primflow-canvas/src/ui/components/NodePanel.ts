@@ -5,9 +5,10 @@ import { keyed } from 'lit-html/directives/keyed.js'
 import { ifDefined } from 'lit-html/directives/if-defined.js'
 import { isBuiltinDataType, isDataPort, type InputPort, type NodeClassType } from '@lyx-pj/primflow-model'
 import type { NodeInstanceType } from '../../Graph'
-import type { CanvasGraph, NodePanelOptions, PanelSection, PanelSectionContext, PanelSectionId } from '../types'
+import type { CanvasGraph, NodePanelOptions, NodePanelSlotContext, PanelSection, PanelSectionContext, PanelSectionId } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
+import { isCanvasUIMounter, MountRegistry, type CanvasUIMountFn } from '../slots'
 import { switchCasePorts } from '../../utils/switchCases'
 import { stopWheel } from '../helpers'
 import { JsonCodeEditor } from './JsonCodeEditor'
@@ -47,6 +48,9 @@ export class NodePanel extends OverlayComponent {
   private compact = false
   /** JSON editors keyed by input name; kept across re-renders of the same node. */
   private readonly jsonEditors = new Map<string, JsonCodeEditor>()
+  /** Framework-agnostic custom mounts keyed by stable slot/section/field id. */
+  private readonly customMounts = new MountRegistry()
+  private activeMountKeys = new Set<string>()
   private readonly idPrefix = `bpgraph-node-panel-${++nextNodePanelId}`
 
   private readonly graph: CanvasGraph
@@ -73,6 +77,8 @@ export class NodePanel extends OverlayComponent {
     const panelOptions = options()
     this.expanded = panelOptions ? panelOptions.open ?? true : false
     this.graph.on('node:changed', this.onNodeChanged)
+    this.graph.on('node:created', this.onNodesListChanged)
+    this.graph.on('node:removed', this.onNodesListChanged)
     this.render()
   }
 
@@ -138,8 +144,17 @@ export class NodePanel extends OverlayComponent {
 
   destroy() {
     this.graph.off('node:changed', this.onNodeChanged)
+    this.graph.off('node:created', this.onNodesListChanged)
+    this.graph.off('node:removed', this.onNodesListChanged)
     this.destroyJsonEditors()
+    this.customMounts.clear()
     super.destroy()
+  }
+
+  private mountNode<TCtx>(key: string, mount: CanvasUIMountFn<TCtx>, context: TCtx): TemplateResult {
+    this.activeMountKeys.add(key)
+    const element = this.customMounts.sync(key, mount, context)
+    return html`${keyed(key, element)}`
   }
 
   /** Release every JSON editor instance and remove its DOM. */
@@ -179,8 +194,16 @@ export class NodePanel extends OverlayComponent {
     return editor
   }
 
+  private onNodesListChanged = () => {
+    if (!this.node && this.expanded && this.activeTab === 'node') this.render()
+  }
+
   private onNodeChanged = (node: NodeInstanceType, change: string) => {
-    if (!this.node || this.node.id !== node.id) return
+    if (!this.node) {
+      if (change === 'title' && this.expanded && this.activeTab === 'node') this.render()
+      return
+    }
+    if (this.node.id !== node.id) return
     if (!['inputValues', 'inputs', 'outputs', 'title', 'loop'].includes(change)) return
     // Values changed outside the editor (undo, graph load); push them back in.
     if (change === 'inputValues') {
@@ -208,40 +231,72 @@ export class NodePanel extends OverlayComponent {
   }
 
   private render() {
-    if (!this.expanded || !this.options()) {
+    const options = this.options()
+    const slotContext: NodePanelSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: Boolean(this.expanded && options),
+      compact: this.compact,
+      offset: this.offset,
+      width: this.width,
+      node: this.node,
+      nodes: this.graph.getNodes(),
+      close: this.closePanel,
+      locateNode: this.locateNode,
+    }
+    if (this.syncSlot(this.graph.options.ui?.nodePanel, slotContext)) {
+      this.customMounts.clear()
+      return
+    }
+    if (!this.expanded || !options) {
+      this.customMounts.clear()
       this.commit(nothing)
       return
     }
+    this.activeMountKeys = new Set()
     const content = this.activeTab === 'node' ? this.nodeTabContent() : this.globalTabContent()
     this.commit(this.template(content))
+    this.customMounts.prune(this.activeMountKeys)
   }
 
   private template(content: TemplateResult | typeof nothing): TemplateResult {
     const options = this.options() ?? {}
+    const accent = this.activeTab === 'node' && this.node ? this.nodeAccent(this.node) : undefined
+    const panelStyle = this.compact
+      ? {
+          width: 'auto',
+          left: `${UI_GAP}px`,
+          right: `${UI_GAP}px`,
+          maxWidth: 'none',
+          ...(accent ? { '--bpgraph-panel-node-accent': accent } : {}),
+        }
+      : {
+          width: `${options.width ?? 320}px`,
+          right: `${UI_GAP + this.offset}px`,
+          maxWidth: `calc(100% - ${UI_GAP * 2 + this.offset}px)`,
+          ...(accent ? { '--bpgraph-panel-node-accent': accent } : {}),
+        }
     return html`
-      <aside
-        class=${`bpgraph-node-panel${this.compact ? ' is-compact' : ''}`}
+      <pf-surface
+        variant="panel"
+        elevated
+        class=${`bpgraph-node-panel${this.compact ? ' is-compact' : ''}${accent ? ' has-node-accent' : ''}`}
         role="region"
         aria-label=${this.t('Node panel')}
-        style=${styleMap(this.compact
-          ? {
-              width: 'auto',
-              left: `${UI_GAP}px`,
-              right: `${UI_GAP}px`,
-              maxWidth: 'none',
-            }
-          : {
-              width: `${options.width ?? 320}px`,
-              right: `${UI_GAP + this.offset}px`,
-              maxWidth: `calc(100% - ${UI_GAP * 2 + this.offset}px)`,
-            })}
+        style=${styleMap(panelStyle)}
         @wheel=${stopWheel}
       >
         <header class="bpgraph-node-panel-header">
           <div class="bpgraph-node-panel-heading">
-            <h2 class="bpgraph-node-panel-title">${this.panelTitle()}</h2>
+            <div class="bpgraph-node-panel-title-wrap">
+              ${this.headerGlyph()}
+              <h2 class="bpgraph-node-panel-title">${this.panelTitle()}</h2>
+            </div>
             <button type="button" class="bpgraph-node-panel-close" aria-label=${this.t('Close')} @click=${this.closePanel}>
-              ×
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
             </button>
           </div>
           <div
@@ -262,7 +317,40 @@ export class NodePanel extends OverlayComponent {
         >
           ${content}
         </div>
-      </aside>
+      </pf-surface>
+    `
+  }
+
+  private nodeAccent(node: NodeInstanceType): string | undefined {
+    const style = (node as unknown as { style?: { header?: { background?: string } } }).style
+    return style?.header?.background ?? node.definition?.style?.header?.background
+  }
+
+  private headerGlyph(): TemplateResult {
+    if (this.activeTab === 'node' && this.node) {
+      return html`<span class="bpgraph-node-panel-accent-dot" aria-hidden="true"></span>`
+    }
+    if (this.activeTab === 'global') {
+      return html`
+        <span class="bpgraph-node-panel-title-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="14" height="14">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            <circle cx="5.5" cy="4.5" r="1.5" fill="currentColor" />
+            <circle cx="10.5" cy="8" r="1.5" fill="currentColor" />
+            <circle cx="6.5" cy="11.5" r="1.5" fill="currentColor" />
+          </svg>
+        </span>
+      `
+    }
+    return html`
+      <span class="bpgraph-node-panel-title-icon" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <rect x="2.2" y="2.2" width="4.6" height="4.6" rx="1.2" stroke="currentColor" stroke-width="1.35" fill="none" />
+          <rect x="9.2" y="2.2" width="4.6" height="4.6" rx="1.2" stroke="currentColor" stroke-width="1.35" fill="none" />
+          <rect x="2.2" y="9.2" width="4.6" height="4.6" rx="1.2" stroke="currentColor" stroke-width="1.35" fill="none" />
+          <rect x="9.2" y="9.2" width="4.6" height="4.6" rx="1.2" stroke="currentColor" stroke-width="1.35" fill="none" />
+        </svg>
+      </span>
     `
   }
 
@@ -301,46 +389,61 @@ export class NodePanel extends OverlayComponent {
   }
 
   private overviewContent(): TemplateResult | typeof nothing {
-    const render = this.options()?.overview
-    if (render) {
-      return render({
+    const overview = this.options()?.overview
+    if (overview) {
+      const ctx = {
         graph: this.graph,
         close: this.closePanel,
         locateNode: this.locateNode,
         language: this.graph.options.language,
-      })
+      }
+      return isCanvasUIMounter(overview) ? this.mountNode('panel:overview', overview.mount, ctx) : overview(ctx)
     }
     const nodes = this.graph.getNodes()
     return html`
       <div class="bpgraph-node-panel-overview">
         ${nodes.length > 0
           ? html`<ul class="bpgraph-node-panel-overview-list" aria-label=${this.t('Nodes in this view')}>
-              ${nodes.map((node) => html`
-                <li>
-                  <button
-                    type="button"
-                    class="bpgraph-node-panel-overview-item"
-                    data-node-id=${node.id}
-                    @click=${() => this.locateNode(node)}
-                  >
-                    ${this.nodeLabel(node)}
-                  </button>
-                </li>
-              `)}
+              ${nodes.map((node) => {
+                const accent = this.nodeAccent(node)
+                return html`
+                  <li>
+                    <button
+                      type="button"
+                      class="bpgraph-node-panel-overview-item"
+                      data-node-id=${node.id}
+                      @click=${() => this.locateNode(node)}
+                    >
+                      <span
+                        class="bpgraph-node-panel-overview-dot"
+                        style=${styleMap(accent ? { background: accent, color: accent } : {})}
+                        aria-hidden="true"
+                      ></span>
+                      <span class="bpgraph-node-panel-overview-name">${this.nodeLabel(node)}</span>
+                      <svg class="bpgraph-node-panel-overview-chevron" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                        <path d="M6 3.75 10.25 8 6 12.25" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+                      </svg>
+                    </button>
+                  </li>
+                `
+              })}
             </ul>`
-          : html`<p class="bpgraph-node-panel-empty">${this.t('No nodes in this view')}</p>`}
+          : html`<p class="bpgraph-node-panel-empty bpgraph-node-panel-empty-block">${this.t('No nodes in this view')}</p>`}
       </div>
     `
   }
 
   private globalTabContent(): TemplateResult | typeof nothing {
-    const render = this.options()?.globalSettings
-    if (render) {
-      return render({
+    const globalSettings = this.options()?.globalSettings
+    if (globalSettings) {
+      const ctx = {
         graph: this.graph,
         close: this.closePanel,
         language: this.graph.options.language,
-      })
+      }
+      return isCanvasUIMounter(globalSettings)
+        ? this.mountNode('panel:global', globalSettings.mount, ctx)
+        : globalSettings(ctx)
     }
     return html`<p class="bpgraph-node-panel-empty bpgraph-node-panel-empty-block">${this.t('No global settings')}</p>`
   }
@@ -383,7 +486,10 @@ export class NodePanel extends OverlayComponent {
       ` : nothing,
       inputs: () => kind === 'start' ? nothing : html`
         <section class="bpgraph-node-panel-section">
-          <h4 class="bpgraph-node-panel-section-title">${this.t('Inputs')}</h4>
+          <div class="bpgraph-node-panel-section-head">
+            <h4 class="bpgraph-node-panel-section-title">${this.t('Inputs')}</h4>
+            ${inputs.length > 0 ? html`<span class="bpgraph-node-panel-section-count">${inputs.length}</span>` : nothing}
+          </div>
           ${inputs.length > 0
             ? inputs.map((input) => this.fieldTemplate(node, input, values, caseCount))
             : html`<p class="bpgraph-node-panel-empty">${this.t('No inputs')}</p>`}
@@ -391,26 +497,31 @@ export class NodePanel extends OverlayComponent {
       `,
       outputs: () => kind === 'start' ? nothing : html`
         <section class="bpgraph-node-panel-section">
-          <h4 class="bpgraph-node-panel-section-title">${this.t('Outputs')}</h4>
+          <div class="bpgraph-node-panel-section-head">
+            <h4 class="bpgraph-node-panel-section-title">${this.t('Outputs')}</h4>
+            ${outputs.length > 0 ? html`<span class="bpgraph-node-panel-section-count">${outputs.length}</span>` : nothing}
+          </div>
           ${outputs.length > 0
             ? html`<ul class="bpgraph-node-panel-outputs">
-                ${outputs.map((output) => html`<li>${output.name} (${output.type})</li>`)}
+                ${outputs.map((output) => html`<li><span class="bpgraph-node-panel-port-dot" aria-hidden="true"></span><span>${output.name} (${output.type})</span></li>`)}
               </ul>`
             : html`<p class="bpgraph-node-panel-empty">${this.t('No outputs')}</p>`}
         </section>
       `,
       retry: () => retry ? html`
         <section class="bpgraph-node-panel-section">
-          <h4 class="bpgraph-node-panel-section-title">${this.t('Retry policy')}</h4>
-          <ul class="bpgraph-node-panel-outputs">
-            <li>${this.t(retry.idempotent ? 'Safe to rerun' : 'Reruns disabled')}</li>
+          <div class="bpgraph-node-panel-section-head">
+            <h4 class="bpgraph-node-panel-section-title">${this.t('Retry policy')}</h4>
+          </div>
+          <ul class="bpgraph-node-panel-outputs bpgraph-node-panel-retry-list">
+            <li class=${retry.idempotent ? 'is-safe' : 'is-disabled'}>${this.t(retry.idempotent ? 'Safe to rerun' : 'Reruns disabled')}</li>
             <li>${this.t('Maximum retries: {count}', { count: retry.idempotent ? retry.maxRetries ?? 0 : 0 })}</li>
             ${retry.fallback ? html`<li>${this.t('Fallback: {port}', { port: retry.fallback.port })}</li>` : nothing}
           </ul>
         </section>
       ` : nothing,
       description: () => description
-        ? html`<div class="bpgraph-node-panel-section">
+        ? html`<div class="bpgraph-node-panel-section bpgraph-node-panel-description-card">
             <p class="bpgraph-node-panel-description">${description}</p>
           </div>`
         : nothing,
@@ -422,17 +533,24 @@ export class NodePanel extends OverlayComponent {
 
     // An application renderer owns the whole content area; sections are not
     // consulted then, because its callback may have side effects.
-    const content = options.render
-      ? options.render({
-          graph: this.graph,
-          node,
-          close: this.closePanel,
-          language: this.graph.options.language,
+    const renderOption = options.render
+    const content = renderOption
+      ? (() => {
+          const ctx = {
+            graph: this.graph,
+            node,
+            close: this.closePanel,
+            language: this.graph.options.language,
+          }
+          return isCanvasUIMounter(renderOption)
+            ? this.mountNode(`panel:render:${node.id}`, renderOption.mount, ctx)
+            : renderOption(ctx)
+        })()
+      : (options.sections?.(node, this.graph) ?? DEFAULT_PANEL_SECTIONS).map((section) => {
+          if (typeof section === 'string') return builtin[section]?.() ?? nothing
+          if (section.mount) return this.mountNode(`panel:section:${node.id}:${section.id}`, section.mount, sectionContext)
+          return section.render ? section.render(sectionContext) : nothing
         })
-      : (options.sections?.(node, this.graph) ?? DEFAULT_PANEL_SECTIONS).map((section) =>
-          typeof section === 'string'
-            ? builtin[section]?.() ?? nothing
-            : section.render(sectionContext))
 
     return html`${content}`
   }
@@ -448,27 +566,29 @@ export class NodePanel extends OverlayComponent {
     return html`
       <label class="bpgraph-node-panel-field bpgraph-node-panel-limit-field">
         <span class="bpgraph-node-panel-label">${fieldLabel}</span>
-        <input
-          class="bpgraph-node-panel-input"
-          aria-label=${fieldLabel}
-          type="number"
-          min=${isIterationLimit ? 1 : Number.MIN_VALUE}
-          max=${ifDefined(isIterationLimit ? Number.MAX_SAFE_INTEGER : undefined)}
-          step=${isIterationLimit ? '1' : 'any'}
-          placeholder=${this.t(placeholder)}
-          .value=${live(String(node.loop?.[key] ?? ''))}
-          @change=${(event: Event) => {
-            const input = event.currentTarget as HTMLInputElement
-            const config = node.loop
-            if (!config || !input.validity.valid) return
-            const value = input.value === '' ? undefined : input.valueAsNumber
-            if (config[key] === value) return
-            const next = { ...config }
-            if (value === undefined) delete next[key]
-            else next[key] = value
-            node.loop = next
-          }}
-        />
+        <pf-field size="sm">
+          <input
+            class="bpgraph-node-panel-input"
+            aria-label=${fieldLabel}
+            type="number"
+            min=${isIterationLimit ? 1 : Number.MIN_VALUE}
+            max=${ifDefined(isIterationLimit ? Number.MAX_SAFE_INTEGER : undefined)}
+            step=${isIterationLimit ? '1' : 'any'}
+            placeholder=${this.t(placeholder)}
+            .value=${live(String(node.loop?.[key] ?? ''))}
+            @change=${(event: Event) => {
+              const input = event.currentTarget as HTMLInputElement
+              const config = node.loop
+              if (!config || !input.validity.valid) return
+              const value = input.value === '' ? undefined : input.valueAsNumber
+              if (config[key] === value) return
+              const next = { ...config }
+              if (value === undefined) delete next[key]
+              else next[key] = value
+              node.loop = next
+            }}
+          />
+        </pf-field>
         <span class="bpgraph-node-panel-limit-error">
           ${this.t(isIterationLimit ? 'Enter a positive whole number.' : 'Enter a time greater than zero.')}
         </span>
@@ -541,21 +661,25 @@ export class NodePanel extends OverlayComponent {
     }
     switch (input.editor ?? input.type) {
       case 'number':
-        return html`<input
-          class="bpgraph-node-panel-input"
-          data-field=${input.name}
-          type="number"
-          .value=${live(String(value ?? ''))}
-          @change=${(evt: Event) => this.setValue(node, input, evt)}
-        />`
+        return html`<pf-field size="sm">
+          <input
+            class="bpgraph-node-panel-input"
+            data-field=${input.name}
+            type="number"
+            .value=${live(String(value ?? ''))}
+            @change=${(evt: Event) => this.setValue(node, input, evt)}
+          />
+        </pf-field>`
       case 'textarea':
-        return html`<textarea
-          class="bpgraph-node-panel-input"
-          data-field=${input.name}
-          rows="3"
-          .value=${live(String(value ?? ''))}
-          @input=${(evt: Event) => this.setValue(node, input, evt)}
-        ></textarea>`
+        return html`<pf-field multiline>
+          <textarea
+            class="bpgraph-node-panel-input"
+            data-field=${input.name}
+            rows="3"
+            .value=${live(String(value ?? ''))}
+            @input=${(evt: Event) => this.setValue(node, input, evt)}
+          ></textarea>
+        </pf-field>`
       case 'array':
       case 'object':
         return html`${keyed(
@@ -563,15 +687,17 @@ export class NodePanel extends OverlayComponent {
           this.jsonEditor(node, input, value).element
         )}`
       case 'boolean':
-        return html`<input
-          class="bpgraph-node-panel-checkbox"
-          data-field=${input.name}
-          type="checkbox"
-          .checked=${live(Boolean(value))}
-          @change=${(evt: Event) => this.setValue(node, input, evt)}
-        />`
+        return html`<pf-switch ?checked=${Boolean(value)} size="md">
+          <input
+            class="bpgraph-node-panel-checkbox"
+            data-field=${input.name}
+            type="checkbox"
+            .checked=${live(Boolean(value))}
+            @change=${(evt: Event) => this.setValue(node, input, evt)}
+          />
+        </pf-switch>`
       case 'select':
-        return html`<div class="bpgraph-node-panel-select">
+        return html`<pf-field size="sm" class="bpgraph-node-panel-select">
           <select
             class="bpgraph-node-panel-input"
             data-field=${input.name}
@@ -583,18 +709,20 @@ export class NodePanel extends OverlayComponent {
               </option>`
             )}
           </select>
-          <svg class="bpgraph-node-panel-select-arrow" viewBox="0 0 12 12" aria-hidden="true">
+          <svg slot="suffix" class="bpgraph-node-panel-select-arrow" viewBox="0 0 12 12" aria-hidden="true">
             <path d="M2 4 L6 8 L10 4" stroke="currentColor" stroke-width="1.5" fill="none" />
           </svg>
-        </div>`
+        </pf-field>`
       default:
-        return html`<input
-          class="bpgraph-node-panel-input"
-          data-field=${input.name}
-          type="text"
-          .value=${live(String(value ?? ''))}
-          @input=${(evt: Event) => this.setValue(node, input, evt)}
-        />`
+        return html`<pf-field size="sm">
+          <input
+            class="bpgraph-node-panel-input"
+            data-field=${input.name}
+            type="text"
+            .value=${live(String(value ?? ''))}
+            @input=${(evt: Event) => this.setValue(node, input, evt)}
+          />
+        </pf-field>`
     }
   }
 
@@ -617,15 +745,20 @@ export class NodePanel extends OverlayComponent {
   private customControl(node: NodeInstanceType, input: InputPort, value: unknown): TemplateResult | undefined {
     const registration = this.graph.editors?.get(input.type, 'panel')
     if (!registration) return undefined
-    const template = registration.render({
+    const context = {
       graph: this.graph,
       node,
       port: input,
       value,
-      setValue: (next) => {
+      setValue: (next: unknown) => {
         node.inputValues = { [input.name]: next } as unknown as typeof node.inputValues
       },
-    })
+    }
+    if (registration.mount) {
+      return this.mountNode(`panel:editor:${node.id}:${input.name}`, registration.mount, context)
+    }
+    if (!registration.render) return undefined
+    const template = registration.render(context)
     if (template === nothing) return undefined
     return template
   }

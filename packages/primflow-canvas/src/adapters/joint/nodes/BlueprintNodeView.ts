@@ -6,10 +6,14 @@ import type { InputPort } from '@lyx-pj/primflow-model'
 import { BlueprintNode } from './BlueprintNode'
 import { isContainerCardRenderer } from './containerCard'
 import { ensureUiStyles } from '../../../ui/styles'
+import { registerPrimitives } from '../../../ui/primitives'
 import { portEditorTemplate, type PortEditorHandlers } from '../../../ui/portEditors'
 import { renderNodeHeader } from '../../../ui/nodeHeader'
 import { renderNodeExecution } from '../../../ui/nodeExecution'
 import { NodeOverlayHost } from '../../../ui/nodeOverlay'
+import type { PortEditorContext } from '../../../ui/editors'
+import type { NodeRendererContext } from '../../../ui/nodeRenderers'
+import type { CanvasUIMountFn, CanvasUIMountHandle } from '../../../ui/slots'
 import type { GraphAdapter } from '../../GraphAdapter'
 import type { Graph, NodeInstanceType } from '../../../Graph'
 
@@ -32,6 +36,23 @@ export class BlueprintNodeView extends dia.ElementView {
   private dropdownHost: HTMLDivElement | null = null
   /** Paper-level overlay host for application-provided port editors. */
   private overlay: NodeOverlayHost | null = null
+  /** Active framework-agnostic custom port editor mounts, keyed by input name. */
+  private readonly customPortMounts = new Map<
+    string,
+    {
+      mount: CanvasUIMountFn<PortEditorContext>
+      host: HTMLElement
+      wrapper: HTMLDivElement
+      handle: CanvasUIMountHandle<PortEditorContext> | null
+    }
+  >()
+  /** Active framework-agnostic custom node body mount. */
+  private customBodyMount: {
+    mount: CanvasUIMountFn<NodeRendererContext>
+    host: HTMLElement
+    wrapper: HTMLDivElement
+    handle: CanvasUIMountHandle<NodeRendererContext> | null
+  } | null = null
 
   initialize(...args: Parameters<dia.ElementView['initialize']>) {
     super.initialize(...args)
@@ -53,12 +74,24 @@ export class BlueprintNodeView extends dia.ElementView {
 
   /**
    * JointJS rebuilds ports synchronously in `render()` / `confirmUpdate()`.
-   * Render lit editors after rebuilding, skipping ports that already have editors.
+   * Render lit editors and custom bodies only when geometry, attributes, or
+   * ports changed; skip pure transforms such as dragging so embedded previews
+   * stay mounted without flickering.
    */
   confirmUpdate(flag: number, opt: Record<string, unknown> = {}): number {
+    const flags = dia.ElementView.Flags
+    const needsPorts =
+      this.hasFlag(flag, flags.RENDER) ||
+      this.hasFlag(flag, flags.PORTS) ||
+      this.hasFlag(flag, flags.RESIZE) ||
+      this.hasFlag(flag, flags.UPDATE)
+    const needsCustomBody =
+      this.hasFlag(flag, flags.RENDER) ||
+      this.hasFlag(flag, flags.RESIZE) ||
+      this.hasFlag(flag, flags.UPDATE)
     const remaining = super.confirmUpdate(flag, opt)
-    this.renderPortEditors()
-    this.renderCustomBody()
+    if (needsPorts) this.renderPortEditors()
+    if (needsCustomBody) this.renderCustomBody()
     return remaining
   }
 
@@ -96,9 +129,35 @@ export class BlueprintNodeView extends dia.ElementView {
   }
 
   onRemove() {
+    this.destroyCustomPortMounts()
+    this.destroyCustomBodyMount()
     this.overlay?.destroy()
     this.overlay = null
     super.onRemove()
+  }
+
+  private destroyCustomPortMounts() {
+    for (const entry of this.customPortMounts.values()) {
+      try {
+        entry.handle?.destroy?.()
+      } finally {
+        // Detach the per-mount wrapper without clearing its children so deferred
+        // framework unmounts (React portals / roots) can remove their own nodes.
+        entry.wrapper.remove()
+      }
+    }
+    this.customPortMounts.clear()
+  }
+
+  private destroyCustomBodyMount() {
+    if (!this.customBodyMount) return
+    const current = this.customBodyMount
+    this.customBodyMount = null
+    try {
+      current.handle?.destroy?.()
+    } finally {
+      current.wrapper.remove()
+    }
   }
 
   // ---- Port editors -----------------------------------------------------
@@ -134,18 +193,34 @@ export class BlueprintNodeView extends dia.ElementView {
     const inputs = node.get('inputs') || []
     const values = node.get('values') || {}
     const style = node.get('style') || {}
+    registerPrimitives()
     ensureUiStyles()
 
+    const activePortNames = new Set<string>()
     for (const input of inputs) {
       if (!input.id || input.showInput === false) continue
-      const editor = this.findPortNode(input.id, 'portEditor') as HTMLElement | SVGElement | null
-      if (!editor || editor.childElementCount > 0) continue
+      activePortNames.add(input.name)
+      const editor = this.findPortNode(input.id, 'portEditor') as HTMLElement | null
+      if (!editor) continue
+      const customMount = this.syncCustomPortMount(input, editor)
+      if (customMount) continue
+      if (editor.childElementCount > 0) continue
       const custom = this.customEditor(input)
       if (custom) {
         render(custom, editor)
         continue
       }
       render(portEditorTemplate(input, style, values, this.portHandlers), editor)
+    }
+    for (const [name, entry] of [...this.customPortMounts]) {
+      if (!activePortNames.has(name)) {
+        try {
+          entry.handle?.destroy?.()
+        } finally {
+          entry.wrapper.remove()
+          this.customPortMounts.delete(name)
+        }
+      }
     }
     this.syncDropdowns(inputs)
   }
@@ -170,16 +245,94 @@ export class BlueprintNodeView extends dia.ElementView {
     // The built-in loop card hides port labels, which would otherwise sit on
     // top of the preview. An application renderer keeps its own choices.
     this.el?.classList.toggle('is-loop-card', cardVariant === 'loop')
-    if (!registration) return
+    if (!registration) {
+      this.destroyCustomBodyMount()
+      return
+    }
     const root = this.findNode('nodeCustomRoot') as HTMLElement | null
     if (!root) return
     const { width, height } = this.model.size()
-    render(registration.render({
+    const context: NodeRendererContext = {
       graph: this.canvasGraph(),
       node: this.nodeInstance(),
       width,
       height,
-    }), root)
+    }
+    if (registration.mount) {
+      if (
+        this.customBodyMount &&
+        this.customBodyMount.mount === registration.mount &&
+        this.customBodyMount.host === root
+      ) {
+        this.customBodyMount.handle?.update?.(context)
+        return
+      }
+      this.destroyCustomBodyMount()
+      render(nothing, root)
+      const wrapper = document.createElement('div')
+      wrapper.className = 'bpgraph-custom-mount'
+      wrapper.style.width = '100%'
+      wrapper.style.height = '100%'
+      root.appendChild(wrapper)
+      const handle = registration.mount(wrapper, context) ?? null
+      this.customBodyMount = { mount: registration.mount, host: root, wrapper, handle }
+      return
+    }
+    this.destroyCustomBodyMount()
+    if (registration.render) {
+      render(registration.render(context), root)
+    }
+  }
+
+  private portEditorContext(input: InputPort): PortEditorContext {
+    return {
+      graph: this.canvasGraph(),
+      node: this.nodeInstance(),
+      port: input,
+      value: (this.model.get('values') || {})[input.name],
+      setValue: (value) => this.setInputValue(input.name, value),
+      style: this.model.get('style') || {},
+      overlay: this.overlayHost,
+    }
+  }
+
+  /** Sync a framework-agnostic `mount` port editor; returns true when the port uses `mount`. */
+  private syncCustomPortMount(input: InputPort, editor: HTMLElement): boolean {
+    const registration = (this.model as BlueprintNode).get('editors')?.get(input.type, 'port')
+    if (!registration?.mount) {
+      const stale = this.customPortMounts.get(input.name)
+      if (stale) {
+        try {
+          stale.handle?.destroy?.()
+        } finally {
+          stale.wrapper.remove()
+          this.customPortMounts.delete(input.name)
+        }
+      }
+      return false
+    }
+    const context = this.portEditorContext(input)
+    const existing = this.customPortMounts.get(input.name)
+    if (existing && existing.mount === registration.mount && existing.host === editor) {
+      existing.handle?.update?.(context)
+      return true
+    }
+    if (existing) {
+      try {
+        existing.handle?.destroy?.()
+      } finally {
+        existing.wrapper.remove()
+        this.customPortMounts.delete(input.name)
+      }
+    }
+    render(nothing, editor)
+    const wrapper = document.createElement('div')
+    wrapper.className = 'bpgraph-custom-mount'
+    wrapper.style.display = 'contents'
+    editor.appendChild(wrapper)
+    const handle = registration.mount(wrapper, context) ?? null
+    this.customPortMounts.set(input.name, { mount: registration.mount, host: editor, wrapper, handle })
+    return true
   }
 
   /**
@@ -188,16 +341,8 @@ export class BlueprintNodeView extends dia.ElementView {
    */
   private customEditor(input: InputPort): TemplateResult | typeof nothing | undefined {
     const registration = (this.model as BlueprintNode).get('editors')?.get(input.type, 'port')
-    if (!registration) return undefined
-    return registration.render({
-      graph: this.canvasGraph(),
-      node: this.nodeInstance(),
-      port: input,
-      value: (this.model.get('values') || {})[input.name],
-      setValue: (value) => this.setInputValue(input.name, value),
-      style: this.model.get('style') || {},
-      overlay: this.overlayHost,
-    })
+    if (!registration?.render) return undefined
+    return registration.render(this.portEditorContext(input))
   }
 
   /** The canvas graph behind this view. */
@@ -258,6 +403,9 @@ export class BlueprintNodeView extends dia.ElementView {
       value = field?.value ? Number(field.value) : NaN
     } else if (port.type === 'boolean') {
       value = !values[port.name]
+      const checkbox = this.findPortField(port.id)
+      const sw = checkbox?.closest('pf-switch') as (HTMLElement & { checked?: boolean }) | null
+      if (sw) sw.checked = Boolean(value)
     }
     if (field && typeof value === 'string') field.title = value
     this.setInputValue(port.name, value)
@@ -271,10 +419,16 @@ export class BlueprintNodeView extends dia.ElementView {
   }
 
   private validateNumberField(field: HTMLInputElement) {
+    const invalid = Boolean(field.value) && Number.isNaN(Number(field.value))
+    const wrapper = field.closest('pf-field') as (HTMLElement & { invalid?: boolean }) | null
+    if (wrapper) {
+      wrapper.invalid = invalid
+      return
+    }
     if (!field.value) return
     const style = (this.model as BlueprintNode).get('style') || {}
     const boxStyle = style.ports?.input?.editor?.box || {}
-    field.style.borderColor = Number.isNaN(Number(field.value)) ? 'red' : boxStyle.borderColor || ''
+    field.style.borderColor = invalid ? 'red' : boxStyle.borderColor || ''
   }
 
   private stepNumber(port: InputPort, delta: number) {
@@ -516,10 +670,12 @@ export class BlueprintNodeView extends dia.ElementView {
     if (!input?.id) return
     const editor = this.findPortNode(input.id, 'portEditor') as HTMLElement | null
     if (!editor) return
-    // A registered editor owns its markup, so re-render it instead of clearing
-    // the mount with the built-in template.
+    // A registered editor owns its markup, so re-render or update it instead of
+    // clearing the mount with the built-in template.
     if ((this.model as BlueprintNode).get('editors')?.has(input.type, 'port')) {
-      render(this.customEditor(input), editor)
+      if (!this.syncCustomPortMount(input, editor)) {
+        render(this.customEditor(input) ?? nothing, editor)
+      }
       return
     }
     const field = editor.querySelector<HTMLInputElement>('[data-port-field]')

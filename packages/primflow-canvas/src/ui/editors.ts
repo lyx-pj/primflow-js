@@ -1,5 +1,6 @@
 import { nothing, type TemplateResult } from 'lit-html'
 import type { InputPort, NodeStyle } from '@lyx-pj/primflow-model'
+import type { CanvasUIMountFn, CanvasUIMountHandle } from './slots'
 import type { CanvasGraph } from './types'
 import type { NodeInstanceType } from '../Graph'
 
@@ -26,8 +27,10 @@ export type OverlayPlacement = 'above' | 'below' | 'left' | 'right'
 export interface PortOverlayOptions {
   /** Element the overlay is positioned against, usually the editor control. */
   anchor: HTMLElement
-  /** Overlay content. */
-  render: () => TemplateResult | typeof nothing
+  /** Overlay content rendered with lit-html. */
+  render?: () => TemplateResult | typeof nothing
+  /** Framework-agnostic DOM mounter for overlay content (React, Vue, vanilla DOM). */
+  mount?: (container: HTMLElement) => CanvasUIMountHandle<void> | void
   /** Preferred placement; the canvas may fall back when space is tight. */
   placement?: OverlayPlacement
   /** Close the overlay when the pointer leaves the overlay and its anchor. */
@@ -69,16 +72,18 @@ export interface PanelEditorContext {
   setValue: (value: unknown) => void
 }
 
-/** Renderer for the compact control shown next to a port on the canvas. */
+/** Renderer or framework-agnostic mounter for the compact control shown next to a port on the canvas. */
 export interface PortEditorRegistration {
-  render: (context: PortEditorContext) => TemplateResult | typeof nothing
+  render?: (context: PortEditorContext) => TemplateResult | typeof nothing
+  mount?: CanvasUIMountFn<PortEditorContext>
   /** Width of the control in pixels; overrides the global editor box width. */
   width?: number
 }
 
-/** Renderer for the full control shown in the right-hand node panel. */
+/** Renderer or framework-agnostic mounter for the full control shown in the right-hand node panel. */
 export interface PanelEditorRegistration {
-  render: (context: PanelEditorContext) => TemplateResult | typeof nothing
+  render?: (context: PanelEditorContext) => TemplateResult | typeof nothing
+  mount?: CanvasUIMountFn<PanelEditorContext>
 }
 
 /** Editor registration for one data type. */

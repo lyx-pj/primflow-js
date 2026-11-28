@@ -1,11 +1,12 @@
 import { html, nothing } from 'lit-html'
 import { styleMap } from 'lit-html/directives/style-map.js'
 import type { NodeInstanceType } from '../../Graph'
-import type { CanvasGraph } from '../types'
+import type { CanvasGraph, NodeExecutionPreviewSlotContext } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopWheel } from '../helpers'
 import { executionAttempt, executionPorts, executionStatus } from './executionDetails'
+import { applyFloatingPosition } from '../primitives'
 
 /** Live execution status and available port data for the hovered node. */
 export class NodeExecutionPreview extends OverlayComponent {
@@ -46,7 +47,7 @@ export class NodeExecutionPreview extends OverlayComponent {
   }
 
   isOpen() {
-    return this.host.childElementCount > 0
+    return this.host.childElementCount > 0 && this.node !== null
   }
 
   close = () => {
@@ -55,12 +56,27 @@ export class NodeExecutionPreview extends OverlayComponent {
     this.anchor = null
     this.nodeHovered = false
     this.cardHovered = false
+    if (this.syncSlot(this.graph.options.ui?.nodeExecutionPreview, this.emptySlotContext())) return
     this.commit(nothing)
   }
 
-  destroy() {
+  override destroy() {
     this.close()
     super.destroy()
+  }
+
+  private emptySlotContext(): NodeExecutionPreviewSlotContext {
+    return {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: false,
+      node: null,
+      status: null,
+      data: undefined,
+      anchor: null,
+      close: this.close,
+    }
   }
 
   private cancelHide = () => {
@@ -95,25 +111,48 @@ export class NodeExecutionPreview extends OverlayComponent {
   }
 
   private render() {
-    if (!this.node || !this.anchor) return
+    if (!this.node || !this.anchor) {
+      this.syncSlot(this.graph.options.ui?.nodeExecutionPreview, this.emptySlotContext())
+      return
+    }
     const status = this.previewStatus(this.node.id)
     if (status === null) {
       if (!this.nodeHovered) this.close()
       else {
         this.cardHovered = false
-        this.commit(nothing)
+        if (!this.syncSlot(this.graph.options.ui?.nodeExecutionPreview, this.emptySlotContext())) {
+          this.commit(nothing)
+        }
       }
       return
     }
     const stored = this.graph.getNodeExecutionData(this.node.id)
     const showData = this.node.type !== 'start' && (status === 'completed' || status === 'paused' || !!stored?.attempt)
     const data = showData ? stored : undefined
+
+    const slotContext: NodeExecutionPreviewSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: true,
+      node: this.node,
+      status,
+      data,
+      anchor: this.anchor,
+      close: this.close,
+    }
+    if (this.syncSlot(this.graph.options.ui?.nodeExecutionPreview, slotContext)) {
+      return
+    }
+
     const language = this.graph.options.language
     const nodeName = this.node.title || this.node.nodeType
     const bounds = this.overlay.rect()
     const anchor = this.anchor.getBoundingClientRect()
     this.commit(html`
-      <div
+      <pf-surface
+        variant="panel"
+        elevated
         class=${showData ? 'bpgraph-node-preview' : 'bpgraph-node-preview is-status-only'}
         role="tooltip"
         aria-label=${this.t(showData ? '{node} execution data' : '{node} execution status', { node: nodeName })}
@@ -137,7 +176,7 @@ export class NodeExecutionPreview extends OverlayComponent {
           ${executionPorts('Inputs', data.inputs, language)}
           ${status === 'paused' ? nothing : executionPorts('Outputs', data.outputs, language)}
         ` : showData ? html`<p class="bpgraph-node-preview-empty">${this.t('No execution data')}</p>` : nothing}
-      </div>
+      </pf-surface>
     `)
     const card = this.host.querySelector<HTMLElement>('.bpgraph-node-preview')!
     const width = card.offsetWidth
@@ -146,5 +185,13 @@ export class NodeExecutionPreview extends OverlayComponent {
     const left = right + width <= bounds.width - 12 ? right : anchor.left - bounds.left - width - 12
     card.style.left = `${Math.max(12, Math.min(left, bounds.width - width - 12))}px`
     card.style.top = `${Math.max(12, Math.min(anchor.top - bounds.top, bounds.height - height - 12))}px`
+    if (bounds.width > 0 && bounds.height > 0) {
+      void applyFloatingPosition(this.anchor, card, {
+        placement: 'right-start',
+        offset: 12,
+        padding: 12,
+        boundary: this.overlay.root,
+      })
+    }
   }
 }

@@ -61,6 +61,7 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
     ]
     if (!renderer || renderer.body) {
       markup.push({ tagName: 'rect', groupSelector: 'base-node-body', className: 'bpgraph-node-body' })
+      markup.push({ tagName: 'rect', groupSelector: 'base-node-body-sheen' })
     }
     if (!renderer || renderer.header) {
       markup.push({ tagName: 'g', groupSelector: 'base-node-title' })
@@ -99,11 +100,27 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
         'base-node-body': {
           refWidth: '100%',
           refHeight: '100%',
-          fill: style.background ?? 'rgba(41, 44, 47, 0.9)',
-          stroke: style.background ?? 'rgba(41, 44, 47, 0.9)',
+          fill: style.background ?? 'rgba(24, 29, 39, 0.94)',
+          stroke: 'rgba(148, 163, 184, 0.24)',
           strokeWidth: 1,
-          rx: style.borderRadius ?? 8,
-          ry: style.borderRadius ?? 8
+          rx: style.borderRadius ?? 10,
+          ry: style.borderRadius ?? 10
+        },
+        'base-node-body-sheen': {
+          refWidth: '100%',
+          refHeight: '100%',
+          fill: {
+            type: 'linearGradient',
+            stops: [
+              { offset: '0%', color: '#ffffff', opacity: 0.06 },
+              { offset: '42%', color: '#ffffff', opacity: 0.01 },
+              { offset: '100%', color: '#000000', opacity: 0.24 },
+            ],
+            attrs: { x1: '0%', y1: '0%', x2: '0%', y2: '100%' },
+          },
+          rx: style.borderRadius ?? 10,
+          ry: style.borderRadius ?? 10,
+          pointerEvents: 'none',
         },
         'base-node-selection': {
           refWidth: '100%',
@@ -111,8 +128,8 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
           fill: 'transparent',
           stroke: 'transparent',
           strokeWidth: 1,
-          rx: style.borderRadius ?? 8,
-          ry: style.borderRadius ?? 8,
+          rx: style.borderRadius ?? 10,
+          ry: style.borderRadius ?? 10,
           pointerEvents: 'none',
         },
         'base-node-custom': {
@@ -452,7 +469,7 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
     const registered = this.get('editors')?.get(input.type, 'port')
     if (registered?.width !== undefined) return registered.width
     const style = this.get('style') || {}
-    return style.ports?.input?.editor?.box?.width || 80
+    return style.ports?.input?.editor?.box?.width || 92
   }
 
   updateSizeByContent() {
@@ -479,7 +496,7 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
     const paddingTop = style.ports?.layout?.top ?? 0
     const paddingBottom = style.ports?.layout?.bottom ?? 20
 
-    const editorBoxWidth = style.ports?.input?.editor?.box?.width || 80
+    const editorBoxWidth = style.ports?.input?.editor?.box?.width || 92
 
     let portsHeight = portCount > 0 ? portCount * portHeight + (portCount + 1) * portGap : 0
     if (kind === 'switch') {
@@ -514,8 +531,8 @@ export class BlueprintNode extends dia.Element<BlueprintNodeAttributes> {
     )
     const width = Math.max(
       minWidth,
-      titleWidth + 35,
-      inputsWidth + outputsWidth + 14
+      titleWidth + 36,
+      inputsWidth + outputsWidth + 24
     )
 
     this.resize(width, height)

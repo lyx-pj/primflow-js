@@ -1,4 +1,5 @@
-import { anchors, connectors, dia, shapes } from '@joint/core'
+import { anchors, dia, shapes } from '@joint/core'
+import { createObstacleAvoidingRouter, smartLinkConnector } from '../adapters/joint/linkRouting'
 import {
   NodeInstance,
   defineNode,
@@ -198,20 +199,9 @@ export async function buildPreview(
         const anchorFn = group === 'in' ? anchors.left : anchors.right
         return anchorFn(view, magnet, ...rest)
       },
-      defaultConnector: (sourcePoint, targetPoint, routePoints, opt, linkView) => {
-        const link = (linkView as dia.LinkView).model
-        const source = link.source()
-        const element = link.getSourceElement()
-        const group = source.port === undefined ? undefined : element?.getPort(source.port)?.group
-        if (group === 'in') {
-          opt!.sourceDirection = connectors.curve.TangentDirections.LEFT
-          opt!.targetDirection = connectors.curve.TangentDirections.RIGHT
-        } else if (group === 'out') {
-          opt!.sourceDirection = connectors.curve.TangentDirections.RIGHT
-          opt!.targetDirection = connectors.curve.TangentDirections.LEFT
-        }
-        return connectors.curve(sourcePoint, targetPoint, routePoints, opt, linkView)
-      },
+      defaultRouter: createObstacleAvoidingRouter(diaGraph),
+      defaultConnector: (sourcePoint, targetPoint, routePoints, opt, linkView) =>
+        smartLinkConnector(sourcePoint, targetPoint, routePoints, opt, linkView as dia.LinkView),
       defaultLink: () => new shapes.standard.Link({
         attrs: {
           line: {
@@ -314,6 +304,16 @@ export async function buildPreview(
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet')
     svg.setAttribute('aria-hidden', 'true')
     svg.classList.add('bpgraph-subgraph-preview-svg')
+    // Strip interactive port metadata from decorative thumbnails so queries and
+    // hover tooltips on the host call card target only the card's own ports.
+    for (const el of svg.querySelectorAll('[data-port-kind], [data-port-type], [magnet]')) {
+      el.removeAttribute('data-port-kind')
+      el.removeAttribute('data-port-type')
+      el.removeAttribute('data-port-name')
+      el.removeAttribute('data-port-label')
+      el.removeAttribute('data-port-direction')
+      el.removeAttribute('magnet')
+    }
 
     return {
       svg,

@@ -1,3 +1,4 @@
+import { html } from 'lit-html'
 import type { NodeInstanceType } from '../../../Graph'
 import type { NodeRendererRegistration } from '../../../ui/nodeRenderers'
 import type { CanvasGraph } from '../../../ui/types'
@@ -14,6 +15,15 @@ import {
   type ContainerCardRegistration,
   type ContainerPreviewHost,
 } from './containerCard'
+
+/** Stacked-layers glyph that visually distinguishes subgraph cards at a glance. */
+const SUBGRAPH_GLYPH = html`
+  <svg class="bpgraph-subgraph-glyph" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 3 3 8l9 5 9-5-9-5Z" />
+    <path d="M3 13l9 5 9-5" />
+    <path d="M3 17.5l9 4.5 9-4.5" />
+  </svg>
+`
 
 /** Expanded subgraph call card size; owned by the built-in card renderer. */
 export const SUBGRAPH_CARD_WIDTH = CONTAINER_CARD_WIDTH
@@ -60,6 +70,7 @@ export function createSubgraphCardRenderer(
     variant: 'subgraph',
     expandLabel: 'Expand subgraph card',
     collapseLabel: 'Collapse subgraph card',
+    icon: SUBGRAPH_GLYPH,
     badgeLabel: 'Subgraph',
   })
 }

@@ -3,8 +3,15 @@ import { defineConfig } from 'rolldown'
 const external = (id: string) =>
   id === '@joint/core' ||
   id === '@lyx-pj/primflow-model' ||
+  id === 'lit' ||
+  id.startsWith('lit/') ||
+  id.startsWith('@lit/') ||
   id === 'lit-html' ||
   id.startsWith('lit-html/') ||
+  id === '@floating-ui/dom' ||
+  id.startsWith('@floating-ui/') ||
+  id === '@shoelace-style/shoelace' ||
+  id.startsWith('@shoelace-style/shoelace/') ||
   id.startsWith('@codemirror/') ||
   id.startsWith('@lezer/')
 

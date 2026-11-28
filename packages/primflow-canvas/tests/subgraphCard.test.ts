@@ -198,16 +198,15 @@ test('the card re-renders after the preview host replaces the slot content', () 
   // Start without a target so the slot renders the empty message, then let the
   // host replace it with a mounted preview before the next card render.
   delete node.targetGraphId
+  const attach = vi.fn((slot: HTMLElement) => {
+    slot.setAttribute('data-preview-state', 'ready')
+    slot.replaceChildren(document.createElementNS('http://www.w3.org/2000/svg', 'svg'))
+  })
+  const detach = vi.fn()
   const graph = {
     options: { language: 'en' },
     isReplayMode: () => false,
-    subgraphPreviews: {
-      attach: (slot: HTMLElement) => {
-        slot.setAttribute('data-preview-state', 'ready')
-        slot.replaceChildren(document.createElementNS('http://www.w3.org/2000/svg', 'svg'))
-      },
-      detach: () => {},
-    },
+    subgraphPreviews: { attach, detach },
   } as unknown as CanvasGraph
   const renderer = createSubgraphCardRenderer(graph, node)
   const renderCard = () => render(
@@ -217,9 +216,21 @@ test('the card re-renders after the preview host replaces the slot content', () 
 
   renderCard()
   expect(container.querySelector('.bpgraph-subgraph-preview > svg')).not.toBeNull()
-  // Dragging a node re-renders the card; Lit must still own the slot's markers.
+  expect(attach).toHaveBeenCalledTimes(1)
+  expect(detach).not.toHaveBeenCalled()
+
+  // Re-rendering with the same target (e.g. title or breakpoint change) must
+  // keep the preview slot mounted without detaching or re-attaching it.
+  node.title = 'Renamed'
+  renderCard()
+  expect(attach).toHaveBeenCalledTimes(1)
+  expect(detach).not.toHaveBeenCalled()
+
+  // Changing targetGraphId re-attaches the existing slot with the new target.
   node.targetGraphId = 'file'
   expect(() => renderCard()).not.toThrow()
+  expect(attach).toHaveBeenCalledTimes(2)
+  expect(detach).not.toHaveBeenCalled()
 })
 
 test('the nested preview placeholder never renders a preview slot', () => {

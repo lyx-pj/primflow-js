@@ -1,4 +1,4 @@
-import { dia, shapes, config, anchors, connectors, highlighters, linkTools } from '@joint/core'
+import { dia, shapes, config, anchors, highlighters, linkTools } from '@joint/core'
 import { BlueprintNode } from './nodes/BlueprintNode'
 import { BlueprintNodeView } from './nodes/BlueprintNodeView'
 import { ScrollerController } from './ScrollerController'
@@ -6,6 +6,8 @@ import { SelectionController } from './SelectionController'
 import { GroupEffectController } from './GroupEffectController'
 import { createSubgraphCardRenderer } from './nodes/subgraphCard'
 import { createLoopCardRenderer } from './nodes/loopCard'
+import { createObstacleAvoidingRouter, rectsIntersect, smartLinkConnector, type Rect2D } from './linkRouting'
+import { resolveLinkColor } from '../../utils/portColors'
 import type { GraphAdapter } from '..//GraphAdapter'
 import type { NodeInstanceType } from '../../Graph'
 import type { NodeStyle, LinkStyle } from '@lyx-pj/primflow-model'
@@ -24,6 +26,59 @@ config.classNamePrefix = 'bpgraph-'
  * pointer while the rest of the link stays easy to select.
  */
 const LINK_WRAPPER_ATTRS = { strokeLinecap: 'butt' as const }
+const REROUTE_DIRTY_PAD = 60
+
+const LINK_ENDPOINT_HANDLE_CHILDREN: dia.MarkupJSON = [
+  {
+    tagName: 'circle',
+    selector: 'hit',
+    attributes: { r: 11, fill: 'transparent', stroke: 'none' },
+  },
+  {
+    tagName: 'circle',
+    selector: 'halo',
+    className: 'bpgraph-link-handle-halo',
+    attributes: { r: 8.5 },
+  },
+  {
+    tagName: 'circle',
+    selector: 'knob',
+    className: 'bpgraph-link-handle-knob',
+    attributes: { r: 5 },
+  },
+  {
+    tagName: 'circle',
+    selector: 'core',
+    className: 'bpgraph-link-handle-core',
+    attributes: { r: 2 },
+  },
+]
+
+const SourceEndpointHandle = linkTools.SourceArrowhead.extend({
+  tagName: 'g',
+  attributes: {
+    class: 'source-arrowhead bpgraph-link-handle',
+    cursor: 'grab',
+  },
+  children: LINK_ENDPOINT_HANDLE_CHILDREN,
+  render() {
+    this.renderChildren()
+    return this
+  },
+})
+
+const TargetEndpointHandle = linkTools.TargetArrowhead.extend({
+  tagName: 'g',
+  attributes: {
+    class: 'target-arrowhead bpgraph-link-handle',
+    cursor: 'grab',
+  },
+  children: LINK_ENDPOINT_HANDLE_CHILDREN,
+  render() {
+    this.renderChildren()
+    return this
+  },
+})
 
 export const custom = {
   BlueprintNode,
@@ -45,6 +100,10 @@ export class JointGraph implements IJointGraph {
   public adapter: GraphAdapter
   private readonly linkEndpointTools = new Map<string, dia.ToolsView>()
   private readonly pendingLinks = new Map<string, dia.Link>()
+  private rerouteRafId: number | null = null
+  private rerouteAllLinks = false
+  private readonly dirtyElementIds = new Set<string>()
+  private readonly dirtyRects: Rect2D[] = []
   constructor(adapter: GraphAdapter, options: dia.Paper.Options) {
     this.adapter = adapter
     this.graph = new dia.Graph({
@@ -75,31 +134,19 @@ export class JointGraph implements IJointGraph {
       defaultConnectionPoint: {
         name: "anchor"
       },
-      defaultConnector: (sourcePoint, targetPoint, routePoints, opt, linkView) => {
-        const link = (linkView as dia.LinkView).model as dia.Link
-        const source = link.source()
-        const element = link.getSourceElement()
-        const group = source.port === undefined ? undefined : element?.getPort(source.port)?.group
-        if (group === 'in') {
-          opt!.sourceDirection = connectors.curve.TangentDirections.LEFT
-          opt!.targetDirection = connectors.curve.TangentDirections.RIGHT
-        } else if (group === 'out') {
-          opt!.sourceDirection = connectors.curve.TangentDirections.RIGHT
-          opt!.targetDirection = connectors.curve.TangentDirections.LEFT
-        }
-
-        return connectors.curve(sourcePoint, targetPoint, routePoints, opt, linkView);
-      },
+      defaultRouter: createObstacleAvoidingRouter(this.graph),
+      defaultConnector: (sourcePoint, targetPoint, routePoints, opt, linkView) =>
+        smartLinkConnector(sourcePoint, targetPoint, routePoints, opt, linkView as dia.LinkView),
       validateMagnet: () => {
         if (this.adapter.graph.isReplayMode()) return false
         this.adapter.graph.emit('start:connecting')
         return true
       },
-      defaultLink: () => new shapes.standard.Link({
+      defaultLink: (cellView, magnet) => new shapes.standard.Link({
         attrs: {
           line: {
-            strokeWidth: this.adapter.graph.nodeRegistry.linkStyle.strokeWidth || 1,
-            stroke: this.adapter.graph.nodeRegistry.linkStyle.stroke || 'rgba(255,255,255,0.5)',
+            strokeWidth: this.adapter.graph.nodeRegistry.linkStyle.strokeWidth ?? 1.75,
+            stroke: this.resolveDragLinkStroke(cellView, magnet),
             targetMarker: { type: 'none' }
           },
           wrapper: { ...LINK_WRAPPER_ATTRS }
@@ -168,6 +215,14 @@ export class JointGraph implements IJointGraph {
       }
     })
 
+    // Keep dragged wire colour identical to its committed colour as soon as it snaps to a port.
+    this.paper.on('link:snap:connect', (linkView: dia.LinkView) => {
+      this.syncDraftLinkStroke(linkView.model)
+    })
+    this.paper.on('link:snap:disconnect', (linkView: dia.LinkView) => {
+      this.syncDraftLinkStroke(linkView.model)
+    })
+
     this.graph.on('remove', (cell) => {
       if (cell.isLink()) {
         const link = cell as dia.Link
@@ -197,6 +252,92 @@ export class JointGraph implements IJointGraph {
         if (targetNodeView && targetPortId && !stillConnectedFromTarget) {
           targetNodeView.unhighlightPort(targetPortId)
         }
+      } else if (cell.isElement()) {
+        this.scheduleLinkReroute()
+      }
+    })
+
+    // Re-route affected links when a node moves/resizes, or all links when a node enters the graph.
+    this.graph.on('change:position change:size', (cell: dia.Cell) => {
+      if (cell.isElement()) {
+        this.scheduleElementLinkReroute(cell)
+      }
+    })
+    this.graph.on('add', (cell: dia.Cell) => {
+      if (cell.isElement()) {
+        this.scheduleLinkReroute()
+      }
+    })
+  }
+
+  private scheduleElementLinkReroute(el: dia.Element) {
+    const curr = el.getBBox()
+    const prevPos = (el.previous('position') as { x?: number; y?: number } | undefined) ?? el.position()
+    const prevSize = (el.previous('size') as { width?: number; height?: number } | undefined) ?? el.size()
+    const prev: Rect2D = {
+      x: typeof prevPos?.x === 'number' ? prevPos.x : curr.x,
+      y: typeof prevPos?.y === 'number' ? prevPos.y : curr.y,
+      width: typeof prevSize?.width === 'number' ? prevSize.width : curr.width,
+      height: typeof prevSize?.height === 'number' ? prevSize.height : curr.height,
+    }
+    this.dirtyElementIds.add(String(el.id))
+    this.dirtyRects.push(
+      {
+        x: curr.x - REROUTE_DIRTY_PAD,
+        y: curr.y - REROUTE_DIRTY_PAD,
+        width: curr.width + REROUTE_DIRTY_PAD * 2,
+        height: curr.height + REROUTE_DIRTY_PAD * 2,
+      },
+      {
+        x: prev.x - REROUTE_DIRTY_PAD,
+        y: prev.y - REROUTE_DIRTY_PAD,
+        width: prev.width + REROUTE_DIRTY_PAD * 2,
+        height: prev.height + REROUTE_DIRTY_PAD * 2,
+      }
+    )
+    this.enqueueLinkReroute()
+  }
+
+  private scheduleLinkReroute() {
+    this.rerouteAllLinks = true
+    this.enqueueLinkReroute()
+  }
+
+  private enqueueLinkReroute() {
+    if (this.rerouteRafId !== null || typeof requestAnimationFrame === 'undefined') return
+    if (!this.paper.el?.isConnected) return
+    if (this.graph.getLinks().length === 0) return
+    this.rerouteRafId = requestAnimationFrame(() => {
+      this.rerouteRafId = null
+      const rerouteAll = this.rerouteAllLinks
+      const dirtyIds = new Set(this.dirtyElementIds)
+      const dirtyRects = this.dirtyRects.splice(0, this.dirtyRects.length)
+      this.rerouteAllLinks = false
+      this.dirtyElementIds.clear()
+      if (!this.paper.el?.isConnected) return
+      for (const link of this.graph.getLinks()) {
+        const view = this.paper.findViewByModel(link) as dia.LinkView | undefined
+        if (!view) continue
+        if (!rerouteAll) {
+          const sourceId = link.source().id
+          const targetId = link.target().id
+          const touchesDirtyEndpoint =
+            (sourceId !== undefined && dirtyIds.has(String(sourceId))) ||
+            (targetId !== undefined && dirtyIds.has(String(targetId)))
+          if (!touchesDirtyEndpoint) {
+            const connBBox = view.getConnection()?.bbox()
+            if (connBBox) {
+              const linkRect: Rect2D = {
+                x: connBBox.x,
+                y: connBBox.y,
+                width: connBBox.width,
+                height: connBBox.height,
+              }
+              if (!dirtyRects.some((dirty) => rectsIntersect(linkRect, dirty))) continue
+            }
+          }
+        }
+        view.requestConnectionUpdate()
       }
     })
   }
@@ -281,6 +422,52 @@ export class JointGraph implements IJointGraph {
     return jointLink
   }
 
+  private resolvePortType(nodeId?: string, portId?: string): string | undefined {
+    if (!nodeId || !portId) return undefined
+    const node = this.adapter.findNode(nodeId)
+    if (!node) return undefined
+    const port =
+      node.outputs.find((p) => p.id === portId) ??
+      node.inputs.find((p) => p.id === portId)
+    return port?.type
+  }
+
+  private resolveDragLinkStroke(cellView?: dia.CellView, magnet?: SVGElement): string {
+    const fallback = this.adapter.graph.nodeRegistry.linkStyle.stroke || 'rgba(203, 213, 225, 0.55)'
+    if (!cellView || !magnet) return fallback
+    const portId = cellView.findAttribute('port', magnet) ?? undefined
+    const portType = this.resolvePortType(String(cellView.model.id), portId)
+    if (!portType) return fallback
+    return resolveLinkColor(
+      this.adapter.graph.nodeRegistry.nodeStyle.ports?.colors,
+      fallback,
+      portType,
+      portType
+    )
+  }
+
+  private syncDraftLinkStroke(link: dia.Link) {
+    const fallback = this.adapter.graph.nodeRegistry.linkStyle.stroke || 'rgba(203, 213, 225, 0.55)'
+    const source = link.source()
+    const target = link.target()
+    const sourceType = this.resolvePortType(
+      source.id !== undefined ? String(source.id) : undefined,
+      source.port !== undefined ? String(source.port) : undefined
+    )
+    const targetType = this.resolvePortType(
+      target.id !== undefined ? String(target.id) : undefined,
+      target.port !== undefined ? String(target.port) : undefined
+    )
+    if (!sourceType && !targetType) return
+    const stroke = resolveLinkColor(
+      this.adapter.graph.nodeRegistry.nodeStyle.ports?.colors,
+      fallback,
+      sourceType ?? targetType ?? 'any',
+      targetType ?? sourceType ?? 'any'
+    )
+    link.attr('line/stroke', stroke)
+  }
+
   private createLinkModel(
     id: string | undefined,
     source: JointLinkEnd,
@@ -293,8 +480,8 @@ export class JointGraph implements IJointGraph {
       target,
       attrs: {
         line: {
-          stroke: style?.stroke ?? this.adapter.graph.nodeRegistry.linkStyle.stroke ?? '#ffffff',
-          strokeWidth: style?.strokeWidth ?? this.adapter.graph.nodeRegistry.linkStyle.strokeWidth ?? 2,
+          stroke: style?.stroke ?? this.adapter.graph.nodeRegistry.linkStyle.stroke ?? '#e2e8f0',
+          strokeWidth: style?.strokeWidth ?? this.adapter.graph.nodeRegistry.linkStyle.strokeWidth ?? 1.75,
           targetMarker: { type: 'none' }
         },
         wrapper: { ...LINK_WRAPPER_ATTRS }
@@ -349,8 +536,8 @@ export class JointGraph implements IJointGraph {
 
     const tools = new dia.ToolsView({
       tools: [
-        new linkTools.SourceArrowhead({ scale: 0.75 }),
-        new linkTools.TargetArrowhead({ scale: 0.75 }),
+        new SourceEndpointHandle(),
+        new TargetEndpointHandle(),
       ],
     })
     view.addTools(tools)
@@ -407,8 +594,8 @@ export class JointGraph implements IJointGraph {
           layer: dia.Paper.Layers.FRONT,
           padding: 2,
           attrs: {
-            stroke: defaultNodeStyle.highlightStroke ?? '#0077B6',
-            "stroke-width": defaultNodeStyle.highlightStrokeWidth ?? 1
+            stroke: defaultNodeStyle.highlightStroke ?? '#38bdf8',
+            "stroke-width": defaultNodeStyle.highlightStrokeWidth ?? 1.5
           }
         })
       } else if (cell instanceof dia.Link) {
@@ -418,8 +605,8 @@ export class JointGraph implements IJointGraph {
           layer: dia.Paper.Layers.FRONT,
           padding: 2,
           attrs: {
-            stroke: defaultLinkStyle.highlightStroke ?? '#0077B6',
-            "stroke-width": defaultLinkStyle.highlightStrokeWidth ?? 1
+            stroke: defaultLinkStyle.highlightStroke ?? '#38bdf8',
+            "stroke-width": defaultLinkStyle.highlightStrokeWidth ?? 1.5
           }
         })
       }
@@ -456,7 +643,18 @@ export class JointGraph implements IJointGraph {
     highlighters.mask.removeAll(this.paper)
   }
 
+  private cancelLinkReroute() {
+    if (this.rerouteRafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.rerouteRafId)
+      this.rerouteRafId = null
+    }
+    this.rerouteAllLinks = false
+    this.dirtyElementIds.clear()
+    this.dirtyRects.length = 0
+  }
+
   public destroy() {
+    this.cancelLinkReroute()
     this.scrollerController.stopListening()
     this.selectionController.stopListening()
     this.groupEffectController.stopListening()
@@ -469,6 +667,7 @@ export class JointGraph implements IJointGraph {
   }
 
   public clear() {
+    this.cancelLinkReroute()
     this.linkEndpointTools.clear()
     this.pendingLinks.clear()
     this.graph.clear()

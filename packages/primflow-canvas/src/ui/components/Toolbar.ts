@@ -1,11 +1,12 @@
 import { html, nothing, type TemplateResult } from 'lit-html'
-import type { CanvasGraph, ToolbarAction, ToolbarOptions } from '../types'
+import type { CanvasGraph, ToolbarAction, ToolbarOptions, ToolbarSlotAction, ToolbarSlotContext } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
+import { applyFloatingPosition } from '../primitives'
 
 let nextToolbarId = 0
 
-type ToolbarItem = ToolbarAction & { iconPath?: string; pressed?: boolean }
+type ToolbarItem = ToolbarSlotAction & { iconPath?: string; group?: 'nav' | 'app' | 'panel' }
 
 /** Built-in side panel toggle; CanvasUI supplies state to avoid cross-component references. */
 interface ToolbarPanelControl {
@@ -37,15 +38,11 @@ const unavailablePanelControl: ToolbarPanelControl = {
 }
 
 /**
- * Transparent toolbar.
+ * Floating toolbar backed by Lit primitives (`<pf-surface>`, `<pf-tooltip>`, `<pf-divider>`).
  *
  * Built-in undo/redo operate on canvas history; node and debug panel
- * configuration adds visibility toggles. Application actions execute `run` or
- * emit `toolbar:action` with the action id.
- *
- * The layer reserves the measured width of open side panels, so a centered
- * toolbar stays inside the free canvas area. Actions that no longer fit move
- * into a More menu and the bar keeps a single row.
+ * configuration adds visibility toggles. Consumers can replace the entire
+ * toolbar via `GraphOptions.ui.toolbar`.
  */
 export class Toolbar extends OverlayComponent {
   private readonly tooltipPrefix = `bpgraph-toolbar-tooltip-${++nextToolbarId}`
@@ -108,29 +105,45 @@ export class Toolbar extends OverlayComponent {
   private render() {
     this.closeOverflowWith(false)
     const options = this.options()
+    const customSlot = this.graph.options.ui?.toolbar
+
     if (!options) {
-      this.commit(nothing)
+      if (customSlot !== undefined) {
+        this.syncSlot(customSlot, this.buildSlotContext([], 'center', undefined, false))
+      } else {
+        this.syncSlot(undefined, this.buildSlotContext([], 'center', undefined, false))
+        this.commit(nothing)
+      }
       this.setToolbarBottom(0)
       return
     }
+
     const customActions = (typeof options.actions === 'function' ? options.actions(this.graph) : options.actions) ?? []
     const nodePanelAvailable = this.nodePanel.available()
     const debugPanelAvailable = this.debugPanel.available()
+    const position = (options.position ?? 'top-center').replace('top-', '') as 'left' | 'center' | 'right'
+
     if (customActions.length === 0 && !nodePanelAvailable && !debugPanelAvailable) {
-      this.commit(nothing)
+      if (customSlot !== undefined) {
+        this.syncSlot(customSlot, this.buildSlotContext([], position, options.status, this.graph.isReplayMode()))
+      } else {
+        this.syncSlot(undefined, this.buildSlotContext([], position, options.status, false))
+        this.commit(nothing)
+      }
       this.setToolbarBottom(0)
       return
     }
+
     const nodePanelOpen = nodePanelAvailable && this.nodePanel.open()
     const debugPanelOpen = debugPanelAvailable && this.debugPanel.open()
     const actions: ToolbarItem[] = [
-      // Provide a stable back button for subgraphs and loop bodies within the same view.
       ...(this.graph.canGoBack()
         ? [
             {
               id: 'back',
               label: this.t('Back'),
               iconPath: 'M15 18l-6-6 6-6 M9 12h12',
+              group: 'nav' as const,
               run: () => this.graph.goBack(),
             },
           ]
@@ -140,6 +153,7 @@ export class Toolbar extends OverlayComponent {
         label: this.t('Undo'),
         iconPath: 'M3 7v6h6 M21 17a9 9 0 0 0-15.5-6.3L3 13',
         disabled: !this.graph.undoManager.canUndo(),
+        group: 'nav',
         run: () => this.graph.undoManager.undo(),
       },
       {
@@ -147,10 +161,10 @@ export class Toolbar extends OverlayComponent {
         label: this.t('Redo'),
         iconPath: 'M21 7v6h-6 M3 17a9 9 0 0 1 15.5-6.3L21 13',
         disabled: !this.graph.undoManager.canRedo(),
+        group: 'nav',
         run: () => this.graph.undoManager.redo(),
       },
-      ...customActions,
-      // Keep the side panel toggles last so application action changes do not move them.
+      ...customActions.map((action) => ({ ...action, group: 'app' as const })),
       ...(nodePanelAvailable
         ? [
             {
@@ -159,6 +173,7 @@ export class Toolbar extends OverlayComponent {
               title: nodePanelOpen ? this.t('Hide node panel') : this.t('Show node panel'),
               iconPath: NODE_PANEL_ICON,
               pressed: nodePanelOpen,
+              group: 'panel' as const,
               run: () => this.nodePanel.toggle(),
             },
           ]
@@ -171,25 +186,51 @@ export class Toolbar extends OverlayComponent {
               title: debugPanelOpen ? this.t('Hide debug panel') : this.t('Show debug panel'),
               iconPath: DEBUG_PANEL_ICON,
               pressed: debugPanelOpen,
+              group: 'panel' as const,
               run: () => this.debugPanel.toggle(),
             },
           ]
         : []),
     ]
-    // Replay is read-only; disable toolbar actions except debug visibility to prevent editing or execution.
+
     const replayMode = this.graph.isReplayMode()
     const items = replayMode
       ? actions.map((action) =>
           action.id === DEBUG_PANEL_ACTION_ID ? action : { ...action, disabled: true }
         )
       : actions
-    const position = (options.position ?? 'top-center').replace('top-', '')
+
+    const slotCtx = this.buildSlotContext(items, position, options.status, replayMode)
+    if (this.syncSlot(customSlot, slotCtx)) {
+      this.setToolbarBottom()
+      return
+    }
+
     // Measure the full bar first; a second synchronous commit applies the overflow state
     // before the browser paints, so hidden actions never flash on screen.
     this.commit(this.toolbarTemplate(items, 0, position, options.status))
     const hidden = this.computeOverflow(items.length)
     if (hidden > 0) this.commit(this.toolbarTemplate(items, hidden, position, options.status))
     this.setToolbarBottom()
+  }
+
+  private buildSlotContext(
+    actions: readonly ToolbarSlotAction[],
+    position: 'left' | 'center' | 'right',
+    status: string | undefined,
+    replayMode: boolean
+  ): ToolbarSlotContext {
+    return {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      actions,
+      status,
+      position,
+      rightInset: this.rightInset,
+      replayMode,
+      runAction: (action) => this.run(action),
+    }
   }
 
   private toolbarTemplate(
@@ -201,54 +242,67 @@ export class Toolbar extends OverlayComponent {
     const visible = hidden > 0 ? items.slice(0, items.length - hidden) : items
     const hiddenItems = hidden > 0 ? items.slice(items.length - hidden) : []
     return html`
-      <div class="bpgraph-toolbar is-${position}">
-        ${status ? html`<span class="bpgraph-toolbar-status" role="status">${status}</span>` : nothing}
-        ${visible.map(
-          (action, index) => html`
+      <pf-surface variant="glass" elevated class="bpgraph-toolbar is-${position}">
+        ${status ? html`<pf-badge tone="info" class="bpgraph-toolbar-status" role="status">${status}</pf-badge>` : nothing}
+        ${visible.map((action, index) => {
+          const prev = index > 0 ? visible[index - 1] : undefined
+          const showDivider = Boolean(prev && prev.group !== action.group)
+          const disabled = Boolean(action.disabled)
+          return html`
+            ${showDivider ? html`<pf-divider vertical aria-hidden="true"></pf-divider>` : nothing}
             <span class="bpgraph-toolbar-item">
-              <button
-                type="button"
-                class=${`bpgraph-toolbar-button${action.iconClass || action.iconPath ? ' is-icon' : ''}${
-                  action.pressed ? ' is-pressed' : ''
-                }`}
-                aria-label=${action.label}
-                data-action=${action.id}
-                aria-pressed=${action.pressed === undefined ? nothing : String(action.pressed)}
-                aria-describedby=${`${this.tooltipPrefix}-${index}`}
-                ?disabled=${Boolean(action.disabled)}
-                @click=${() => this.run(action)}
+              <pf-tooltip
+                content=${action.title ?? action.label}
+                placement="bottom"
+                ?disabled=${disabled}
               >
-                ${this.actionIcon(action)}
-              </button>
-              <span id=${`${this.tooltipPrefix}-${index}`} class="bpgraph-toolbar-tooltip" role="tooltip">
+                <button
+                  type="button"
+                  class=${`bpgraph-toolbar-button${action.iconClass || action.iconPath ? ' is-icon' : ''}${
+                    action.pressed ? ' is-pressed' : ''
+                  }`}
+                  aria-label=${action.label}
+                  data-action=${action.id}
+                  aria-pressed=${action.pressed === undefined ? nothing : String(action.pressed)}
+                  aria-describedby=${`${this.tooltipPrefix}-${index}`}
+                  ?disabled=${disabled}
+                  @click=${() => this.run(action)}
+                >
+                  ${this.actionIcon(action)}
+                </button>
+              </pf-tooltip>
+              <span id=${`${this.tooltipPrefix}-${index}`} class="bpgraph-toolbar-tooltip-sr" role="tooltip">
                 ${action.title ?? action.label}
               </span>
             </span>
           `
-        )}
+        })}
         ${hiddenItems.length > 0 ? this.moreTemplate(hiddenItems) : nothing}
-      </div>
+      </pf-surface>
     `
   }
 
   private moreTemplate(hiddenItems: ToolbarItem[]): TemplateResult {
     return html`
+      <pf-divider vertical aria-hidden="true"></pf-divider>
       <span class="bpgraph-toolbar-item">
-        <button
-          type="button"
-          class="bpgraph-toolbar-button is-icon"
-          aria-label=${this.t('More actions')}
-          aria-haspopup="menu"
-          aria-expanded=${String(this.overflowOpen)}
-          data-action="more"
-          @click=${(event: Event) => this.toggleOverflow(event.currentTarget as HTMLButtonElement)}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <circle cx="5" cy="12" r="1.6" />
-            <circle cx="12" cy="12" r="1.6" />
-            <circle cx="19" cy="12" r="1.6" />
-          </svg>
-        </button>
+        <pf-tooltip content=${this.t('More actions')} placement="bottom">
+          <button
+            type="button"
+            class="bpgraph-toolbar-button is-icon"
+            aria-label=${this.t('More actions')}
+            aria-haspopup="menu"
+            aria-expanded=${String(this.overflowOpen)}
+            data-action="more"
+            @click=${(event: Event) => this.toggleOverflow(event.currentTarget as HTMLButtonElement)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.6" />
+              <circle cx="12" cy="12" r="1.6" />
+              <circle cx="19" cy="12" r="1.6" />
+            </svg>
+          </button>
+        </pf-tooltip>
         <dialog class="bpgraph-toolbar-overflow" role="menu" aria-label=${this.t('More actions')}>
           ${hiddenItems.map(
             (action) => html`
@@ -299,17 +353,17 @@ export class Toolbar extends OverlayComponent {
       - (parseFloat(hostStyle.paddingRight) || 0)
     if (available <= 0) return 0
     const barStyle = getComputedStyle(bar)
-    const gap = parseFloat(barStyle.columnGap || barStyle.gap) || 6
+    const gap = parseFloat(barStyle.columnGap || barStyle.gap) || 4
     const barPadding = (parseFloat(barStyle.paddingLeft) || 0) + (parseFloat(barStyle.paddingRight) || 0)
     const itemElements = [...bar.querySelectorAll<HTMLElement>('.bpgraph-toolbar-item')]
     const widths = itemElements.map((item) => item.offsetWidth)
     if (widths.length !== itemCount || widths.length === 0) return 0
     const status = bar.querySelector<HTMLElement>('.bpgraph-toolbar-status')
     const statusWidth = status ? status.offsetWidth + gap : 0
-    // The More button uses the same icon-button sizing as any leading icon action.
+    const dividersWidth = bar.querySelectorAll('pf-divider').length * (7 + gap)
     const iconItem = itemElements.find((item) => item.querySelector('.bpgraph-toolbar-button.is-icon'))
-    const moreWidth = iconItem?.offsetWidth || MORE_BUTTON_WIDTH
-    const fixed = barPadding + statusWidth
+    const moreWidth = (iconItem?.offsetWidth || MORE_BUTTON_WIDTH) + 8
+    const fixed = barPadding + statusWidth + dividersWidth
     const total = fixed + widths.reduce((sum, width) => sum + width, 0) + gap * (widths.length - 1)
     if (total <= available) return 0
     for (let hidden = 0; hidden <= widths.length; hidden += 1) {
@@ -323,7 +377,7 @@ export class Toolbar extends OverlayComponent {
   }
 
   private setToolbarBottom(value?: number) {
-    const bar = this.host.querySelector<HTMLElement>('.bpgraph-toolbar')
+    const bar = this.host.querySelector<HTMLElement>('.bpgraph-toolbar') ?? (this.host.firstElementChild as HTMLElement | null)
     const bottom = value ?? (bar
       ? Math.max(0, bar.getBoundingClientRect().bottom - this.overlay.root.getBoundingClientRect().top)
       : 0)
@@ -366,6 +420,12 @@ export class Toolbar extends OverlayComponent {
       : below
     dialog.style.left = `${left}px`
     dialog.style.top = `${top}px`
+    void applyFloatingPosition(button, dialog, {
+      placement: 'bottom-end',
+      offset: 6,
+      padding: 8,
+      strategy: 'fixed',
+    })
   }
 
   private closeOverflow = () => {

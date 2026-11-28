@@ -6,6 +6,7 @@ import type {
   DebugLogLevel,
   DebugPanelData,
   DebugPanelOptions,
+  DebugPanelSlotContext,
   DebugRecord,
   DebugRecordStatus,
 } from '../types'
@@ -42,6 +43,7 @@ const SCOPE_INDENT = 12
 export class DebugPanel extends OverlayComponent {
   private expanded = false
   private compact = false
+  private readonly expandedLogs = new Set<number>()
   private readonly graph: CanvasGraph
   private readonly options: () => DebugPanelOptions | null
   private readonly onVisibilityChange: () => void
@@ -121,13 +123,34 @@ export class DebugPanel extends OverlayComponent {
   }
 
   private render() {
-    if (!this.expanded || !this.options()) {
+    const options = this.options()
+    const data = this.readData()
+    const slotContext: DebugPanelSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: Boolean(this.expanded && options),
+      compact: this.compact,
+      width: this.width,
+      data,
+      activeRecordId: options?.activeRecordId ?? null,
+      selectRecord: (record) => {
+        if (!record) options?.onRecordSelect?.(null)
+        else this.selectRecord(record)
+      },
+      close: () => this.close(),
+    }
+    if (this.syncSlot(this.graph.options.ui?.debugPanel, slotContext)) {
+      return
+    }
+    if (!this.expanded || !options) {
       this.commit(nothing)
       return
     }
-    const data = this.readData()
     this.commit(html`
-      <aside
+      <pf-surface
+        variant="panel"
+        elevated
         class=${`bpgraph-debug-panel${this.compact ? ' is-compact' : ''}`}
         role="region"
         aria-label=${this.t('Debug panel')}
@@ -153,7 +176,7 @@ export class DebugPanel extends OverlayComponent {
         <div class="bpgraph-debug-panel-scroll">
           ${this.recordsSection(data.records)} ${this.logsSection(data.logs)}
         </div>
-      </aside>
+      </pf-surface>
     `)
   }
 
@@ -228,26 +251,31 @@ export class DebugPanel extends OverlayComponent {
         </h3>
         ${logs.length > 0
           ? html`<ul class="bpgraph-debug-logs">
-              ${logs.map((entry) => this.logTemplate(entry))}
+              ${logs.map((entry, index) => this.logTemplate(entry, index))}
             </ul>`
           : html`<p class="bpgraph-debug-panel-empty">${this.t('No logs')}</p>`}
       </section>
     `
   }
 
-  private logTemplate(entry: DebugLogEntry): TemplateResult {
+  private logTemplate(entry: DebugLogEntry, index: number): TemplateResult {
     const level: DebugLogLevel = entry.level ?? 'info'
     const nodeLabel = entry.nodeId ? this.nodeLabel(entry.nodeId) : ''
     // Prefix subgraph logs with [subgraph name] to distinguish their source.
     const scopeLabel = entry.scope?.title ? `[${entry.scope.title}]` : ''
-    // Render logs on one line and expose full messages through title.
     const fullText = [scopeLabel, nodeLabel, entry.message].filter(Boolean).join(' · ')
     // Subgraph entries are indented so nested runs stay readable.
     const depth = entry.scope?.depth ?? 0
+    const expanded = this.expandedLogs.has(index)
     return html`
       <li
-        class=${`bpgraph-debug-log is-${level}${entry.type ? ` is-${entry.type.replace(/[^a-z-]/gi, '-')}` : ''}`}
+        class=${`bpgraph-debug-log is-${level}${entry.type ? ` is-${entry.type.replace(/[^a-z-]/gi, '-')}` : ''}${expanded ? ' is-expanded' : ''}`}
         style=${styleMap({ paddingLeft: `${depth * SCOPE_INDENT}px` })}
+        @click=${() => {
+          if (this.expandedLogs.has(index)) this.expandedLogs.delete(index)
+          else this.expandedLogs.add(index)
+          this.render()
+        }}
       >
         <span class="bpgraph-debug-log-time">${formatTime(entry.time)}</span>
         ${entry.type

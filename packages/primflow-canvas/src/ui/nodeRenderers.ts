@@ -1,5 +1,6 @@
 import { nothing, type TemplateResult } from 'lit-html'
 import type { InputPort, OutputPort } from '@lyx-pj/primflow-model'
+import type { CanvasUIMountFn } from './slots'
 import type { CanvasGraph } from './types'
 import type { NodeInstanceType } from '../Graph'
 
@@ -36,7 +37,9 @@ export interface PortLayoutContext {
  * working, because the JointJS element and its ports are unchanged.
  */
 export interface NodeRendererRegistration {
-  render: (context: NodeRendererContext) => TemplateResult | typeof nothing
+  render?: (context: NodeRendererContext) => TemplateResult | typeof nothing
+  /** Framework-agnostic DOM mounter for the node body (React, Vue, vanilla DOM). */
+  mount?: CanvasUIMountFn<NodeRendererContext>
   /**
    * Node size owned by the renderer.
    *

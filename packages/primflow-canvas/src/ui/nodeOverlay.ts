@@ -1,5 +1,6 @@
 import { nothing, render } from 'lit-html'
 import type { OverlayPlacement, PortOverlayHost, PortOverlayOptions } from './editors'
+import type { CanvasUIMountHandle } from './slots'
 
 /**
  * Events that must not reach JointJS while an overlay is open.
@@ -27,6 +28,7 @@ interface OverlayEntry {
   content: HTMLDivElement
   anchor: HTMLElement
   outsideHandler: (evt: Event) => void
+  mountHandle: CanvasUIMountHandle<void> | null
 }
 
 /**
@@ -56,13 +58,19 @@ export class NodeOverlayHost implements PortOverlayHost {
     const content = document.createElement('div')
     content.className = 'bpgraph-node-overlay'
     host.appendChild(content)
-    render(options.render(), content)
+    let mountHandle: CanvasUIMountHandle<void> | null = null
+    if (options.mount) {
+      mountHandle = options.mount(content) ?? null
+    } else if (options.render) {
+      render(options.render(), content)
+    }
     this.position(content, options.anchor, options.placement ?? 'above')
 
     const entry: OverlayEntry = {
       content,
       anchor: options.anchor,
       outsideHandler: () => {},
+      mountHandle,
     }
     if (options.closeOnOutsideClick !== false) {
       entry.outsideHandler = (evt: Event) => {
@@ -95,8 +103,13 @@ export class NodeOverlayHost implements PortOverlayHost {
     if (!this.overlays.delete(entry)) return
     document.removeEventListener('mousedown', entry.outsideHandler, true)
     document.removeEventListener('click', entry.outsideHandler, true)
-    render(nothing, entry.content)
-    entry.content.remove()
+    try {
+      entry.mountHandle?.destroy?.()
+    } finally {
+      entry.mountHandle = null
+      render(nothing, entry.content)
+      entry.content.remove()
+    }
   }
 
   private ensureHost() {

@@ -503,10 +503,18 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
   }
 
   public setOptions(options: Partial<GraphOptions>) {
-    const language = options.language ?? 'en'
+    const language = this.graph.options.language ?? 'en'
     if (this.joint.graph.get('language') !== language) {
       this.joint.graph.set('language', language)
       this.ui?.refreshLanguage()
+    }
+    if (options.theme !== undefined) this.ui?.refreshTheme()
+    if (
+      options.ui !== undefined ||
+      options.nodeFloatingBar !== undefined ||
+      options.nodeWidgets !== undefined
+    ) {
+      this.ui?.refreshAll()
     }
     if (options.toolbar !== undefined || options.debugPanel !== undefined || options.nodePanel !== undefined || options.navigation !== undefined) this.ui?.refreshToolbar()
     if (options.debugPanel !== undefined) this.ui?.refreshDebugPanel()
@@ -803,6 +811,16 @@ export class GraphAdapter extends EventEmitter<AdpterEventPayload> implements IG
     // })
 
     // Node mouse enter / leave
+    // Magnet drags can move the pointer off a node without firing cell:mouseout.
+    this.graph.on('start:connecting', () => {
+      if (this.hoveredNodes.size === 0) return
+      const stale = [...this.hoveredNodes]
+      this.hoveredNodes.clear()
+      for (const id of stale) {
+        const instance = this.cellsMap.get(id)?.cell
+        if (instance) this.graph.emit('node:mouseleave', instance as NodeInstanceType, new MouseEvent('mouseout'))
+      }
+    })
     this.joint.paper.on('cell:mouseover', (cellView, evt) => {
       if (!(cellView.model instanceof BlueprintNode)) return
       const id = cellView.model.id as string

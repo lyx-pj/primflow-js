@@ -4,7 +4,7 @@ import { createRef, ref } from 'lit-html/directives/ref.js'
 import type { NodeClassType, NodeOptions } from '@lyx-pj/primflow-model'
 import type { LinkInstanceType, NodeInstanceType } from '../../Graph'
 import type { GraphAdapter } from '../../adapters/GraphAdapter'
-import type { CanvasGraph, PaletteItemDescription, PaletteOptions } from '../types'
+import type { CanvasGraph, PaletteItemDescription, PaletteOptions, PaletteSlotContext } from '../types'
 import { OverlayComponent } from '../OverlayComponent'
 import type { OverlayLayer } from '../OverlayLayer'
 import { stopEvent, stopWheel } from '../helpers'
@@ -61,6 +61,10 @@ export class Palette extends OverlayComponent {
     this.render()
   }
 
+  refresh() {
+    this.render()
+  }
+
   constructor(graph: CanvasGraph, adapter: GraphAdapter, overlay: OverlayLayer, options: () => PaletteOptions | null) {
     super(overlay, 'bpgraph-palette-layer', () => graph.options.language)
     this.graph = graph
@@ -107,7 +111,22 @@ export class Palette extends OverlayComponent {
       this.point = this.clamp(this.point, rect.width, rect.height)
       this.render()
     }
-    this.searchRef.value?.focus()
+    this.focusSearch()
+  }
+
+  private focusSearch() {
+    const input = this.searchRef.value
+    if (!input) return
+    input.focus()
+    // Re-apply focus after custom-element slot upgrade in real browsers.
+    const wrapper = input.closest('pf-field') as (HTMLElement & { updateComplete?: Promise<unknown> }) | null
+    if (wrapper?.updateComplete) {
+      void wrapper.updateComplete.then(() => {
+        if (this.open && this.searchRef.value === input && document.activeElement !== input) {
+          input.focus()
+        }
+      })
+    }
   }
 
   close() {
@@ -118,7 +137,7 @@ export class Palette extends OverlayComponent {
     this.host.classList.remove('is-connection-modal')
     if (!this.open) return
     this.open = false
-    this.commit(nothing)
+    this.render()
   }
 
   destroy() {
@@ -138,7 +157,31 @@ export class Palette extends OverlayComponent {
   private render() {
     this.tooltip.close()
     this.host.classList.toggle('is-connection-modal', this.connection !== null)
+    const customSlot = this.graph.options.ui?.palette
     if (!this.open) {
+      const closedCtx: PaletteSlotContext = {
+        graph: this.graph,
+        language: this.currentLanguage(),
+        t: this.t,
+        open: false,
+        mode: 'add',
+        point: { ...this.point },
+        query: this.query,
+        category: this.category,
+        categories: [],
+        items: [],
+        setQuery: (q) => {
+          this.query = q
+          this.render()
+        },
+        setCategory: (cat) => {
+          this.category = cat
+          this.render()
+        },
+        selectItem: () => {},
+        close: () => this.close(),
+      }
+      if (this.syncSlot(customSlot, closedCtx)) return
       this.commit(nothing)
       return
     }
@@ -149,6 +192,34 @@ export class Palette extends OverlayComponent {
     const visible = this.visibleItems(matching)
     const connectionMode = this.connection !== null
     const noCompatible = connectionMode && items.length === 0
+
+    const slotCtx: PaletteSlotContext = {
+      graph: this.graph,
+      language: this.currentLanguage(),
+      t: this.t,
+      open: true,
+      mode: connectionMode ? 'connect' : 'add',
+      point: { ...this.point },
+      query: this.query,
+      category: this.category,
+      categories,
+      items: visible,
+      setQuery: (q) => {
+        this.query = q
+        this.render()
+      },
+      setCategory: (cat) => {
+        this.category = cat
+        this.render()
+      },
+      selectItem: (selected) => {
+        const match = visible.find((candidate) => candidate.nodeClass === selected.nodeClass && candidate.title === selected.title)
+        if (match) this.createNodeAt(match, this.client.x, this.client.y)
+      },
+      close: () => this.close(),
+    }
+    if (this.syncSlot(customSlot, slotCtx)) return
+
     this.commit(html`
       ${connectionMode
         ? html`<div
@@ -159,8 +230,10 @@ export class Palette extends OverlayComponent {
             @contextmenu=${stopEvent}
           ></div>`
         : nothing}
-      <div
+      <pf-surface
         ${ref(this.panelRef)}
+        variant="menu"
+        elevated
         class="bpgraph-menu bpgraph-palette ${this.hidden ? 'is-hidden' : ''} ${connectionMode ? 'is-connecting' : ''}"
         role="dialog"
         aria-modal=${connectionMode ? 'true' : nothing}
@@ -175,29 +248,40 @@ export class Palette extends OverlayComponent {
         @wheel=${stopWheel}
         @keydown=${this.onPanelKeyDown}
       >
-        <div class="bpgraph-palette-header">
-          <div>
-            <strong>${connectionMode ? this.t('Add and connect node') : this.t('Add node')}</strong>
-            ${connectionMode ? nothing : html`<p>${this.t('Choose a node to build your workflow')}</p>`}
+        <div class="bpgraph-palette-top">
+          <div class="bpgraph-palette-header">
+            <div class="bpgraph-palette-heading">
+              <strong>${connectionMode ? this.t('Add and connect node') : this.t('Add node')}</strong>
+              ${connectionMode ? nothing : html`<p>${this.t('Choose a node to build your workflow')}</p>`}
+            </div>
+            <button
+              type="button"
+              class="bpgraph-palette-close"
+              aria-label=${this.t('Close node palette')}
+              @click=${() => this.close()}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
           </div>
-          <button
-            type="button"
-            class="bpgraph-palette-close"
-            aria-label=${this.t('Close node palette')}
-            @click=${() => this.close()}
-          >
-            ×
-          </button>
+          <pf-field size="md" class="bpgraph-palette-search-wrap">
+            <svg slot="prefix" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              ${ref(this.searchRef)}
+              class="bpgraph-palette-search"
+              aria-label=${this.t('Search nodes')}
+              placeholder=${this.t('Search by name, category, or purpose…')}
+              .value=${this.query}
+              @input=${this.onSearch}
+              @keydown=${this.onKeyDown}
+            />
+          </pf-field>
         </div>
-        <input
-          ${ref(this.searchRef)}
-          class="bpgraph-palette-search"
-          aria-label=${this.t('Search nodes')}
-          placeholder=${this.t('Search by name, category, or purpose…')}
-          .value=${this.query}
-          @input=${this.onSearch}
-          @keydown=${this.onKeyDown}
-        />
         <nav class="bpgraph-palette-categories" aria-label=${this.t('Node categories')}>
           ${[null, ...categories].map(
             (category) => html`
@@ -246,7 +330,7 @@ export class Palette extends OverlayComponent {
             : html`<span>${this.t('Click to add · Drag onto canvas')}</span
                 ><span>${this.t('Enter Add first result · Esc to close')}</span>`}
         </div>
-      </div>
+      </pf-surface>
     `)
   }
 
@@ -484,7 +568,7 @@ export class Palette extends OverlayComponent {
     const previousSkips = this.graph.skipsUndoManager
     this.graph.skipsUndoManager = true
     const node = this.graph.addNode(nodeClass, this.paletteDefaults(item))
-    this.moveNode(node, evt.clientX, evt.clientY)
+    this.moveNode(node, evt.clientX, evt.clientY, false)
 
     this.drag = { item, node, previousSkips }
     document.addEventListener('dragover', this.onDragOver, true)
@@ -497,7 +581,7 @@ export class Palette extends OverlayComponent {
   private onDragOver = (evt: DragEvent) => {
     evt.preventDefault()
     if (!this.drag) return
-    this.moveNode(this.drag.node, evt.clientX, evt.clientY)
+    this.moveNode(this.drag.node, evt.clientX, evt.clientY, false)
   }
 
   private endNodeDrag = () => {
@@ -530,13 +614,32 @@ export class Palette extends OverlayComponent {
     document.removeEventListener('dragend', this.endNodeDrag, true)
   }
 
-  private moveNode(node: NodeInstanceType, clientX: number, clientY: number) {
-    const point = this.graph.clientToGraphPoint(clientX, clientY)
+  private moveNode(node: NodeInstanceType, clientX: number, clientY: number, avoidOverlap = true) {
     const size = this.adapter.getNodeSize(node.id)
-    node.position = {
-      x: point.x - (size?.width ?? 0) / 2,
-      y: point.y - (size?.height ?? 0) / 2,
+    const nodeWidth = size?.width ?? 0
+    const nodeHeight = size?.height ?? 0
+    const point = this.graph.clientToGraphPoint(clientX, clientY)
+    let x = point.x - nodeWidth / 2
+    let y = point.y - nodeHeight / 2
+    if (avoidOverlap) {
+      const others = this.graph.getNodes().filter((candidate) => candidate.id !== node.id)
+      // Stagger consecutive spawns at the same target point so new nodes never stack invisibly.
+      let attempts = 0
+      while (
+        attempts < 12 &&
+        others.some(
+          (other) =>
+            other.position &&
+            Math.abs(other.position.x - x) < 16 &&
+            Math.abs(other.position.y - y) < 16
+        )
+      ) {
+        x += 28
+        y += 28
+        attempts += 1
+      }
     }
+    node.position = { x, y }
   }
 
   private paletteDefaults(item: PaletteItem): NodeOptions<NodeClassType> {

@@ -28,10 +28,14 @@ import { renderThumbnail, type ThumbnailHandle, type ThumbnailOptions } from './
 import type { CanvasGraph } from './ui/types'
 import type {
   CanvasExecutionStatus,
+  CanvasTheme,
+  CanvasUISlots,
   ContextMenuOptions,
   DebugPanelOptions,
   NodeExecutionData,
+  NodeFloatingBarOptions,
   NodePanelOptions,
+  NodeWidgetsOptions,
   PaletteOptions,
   ToolbarOptions,
 } from './ui/types'
@@ -41,6 +45,8 @@ export type { NodeInstanceType }
 export interface GraphOptions {
   /** Built-in UI language, supplied by the application; defaults to English. */
   language?: CanvasLanguage,
+  /** Built-in UI theme preset (`dark` or `light`); defaults to `dark`. */
+  theme?: CanvasTheme,
   container?: HTMLElement,
   width?: number | string,
   height?: number | string,
@@ -59,8 +65,14 @@ export interface GraphOptions {
   nodePanel?: boolean | NodePanelOptions,
   /** Right-hand debug panel; enabling it adds a toolbar visibility toggle. */
   debugPanel?: boolean | DebugPanelOptions,
-  /** Transparent toolbar, shown when actions or panel toggles are configured. */
+  /** Floating toolbar, shown when actions or panel toggles are configured. */
   toolbar?: boolean | ToolbarOptions,
+  /** Floating hover/selection action bar & quick-add `+` buttons around nodes; false disables it. */
+  nodeFloatingBar?: boolean | NodeFloatingBarOptions,
+  /** ComfyUI-style surrounding input widget tray anchored to a selected node; false disables it. */
+  nodeWidgets?: boolean | NodeWidgetsOptions,
+  /** Per-control external replacement slots for every built-in canvas UI widget. */
+  ui?: CanvasUISlots,
   /** Host-managed return navigation for external views; embedded levels return first. */
   navigation?: {
     canGoBack: () => boolean,
@@ -637,6 +649,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     this._model?.setGraph(null)
     this._model = value
     value.setGraph(this as unknown as Graph<{}>)
+    this.adapter?.ui?.refreshNodePanel?.()
   }
 
   protected initialize() {
@@ -839,7 +852,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
 
   /** Re-render the right-hand panel content; skipped while closed. */
   public refreshNodePanel() {
-    this.adapter?.ui?.refreshNodePanel()
+    this.adapter?.ui?.refreshNodePanel?.()
   }
 
   /**
@@ -1226,11 +1239,21 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
 
   public setOptions(options: Partial<GraphOptions> = {}) {
     const previousLanguage = this.options.language
+    const { ui, nodeFloatingBar, nodeWidgets, ...rest } = options
     this.options = mergeDeep(
       this.options as Record<string, unknown>,
-      options
+      rest
     )
-    if (this.adapter) this.adapter.setOptions(this.options)
+    if (ui !== undefined) {
+      this.options.ui = { ...this.options.ui, ...ui }
+    }
+    if (nodeFloatingBar !== undefined) {
+      this.options.nodeFloatingBar = nodeFloatingBar
+    }
+    if (nodeWidgets !== undefined) {
+      this.options.nodeWidgets = nodeWidgets
+    }
+    if (this.adapter) this.adapter.setOptions(options)
     if (options.container) this.setContainer(options.container)
     if (this.subgraphPreviews && options.language !== undefined && options.language !== previousLanguage) {
       this.subgraphPreviews.invalidate()
@@ -1286,6 +1309,7 @@ export class Graph<NodeDefs extends Record<string, NodeClassType> = {}> extends 
     // Remount an empty model to insert Start; model replacement and destroy only reset it.
     this.model.setGraph(null)
     this.model.setGraph(this as unknown as Graph<{}>)
+    this.adapter?.ui?.refreshNodePanel?.()
   }
 
   private reset(options: { keepPreviewCache?: boolean } = {}) {

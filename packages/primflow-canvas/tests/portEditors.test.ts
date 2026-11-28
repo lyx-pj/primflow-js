@@ -22,7 +22,7 @@ function mountEditor(input: InputPort, value: unknown) {
   view = new BlueprintNodeView({ model })
   view.findPortNode = () => editor
   // Use the actual port rebuild rendering entry to cover template and view event integration.
-  view.confirmUpdate(0)
+  view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))
   return { graph, model, editor, view }
 }
 
@@ -38,7 +38,7 @@ test('initial and rebuilt ports use the bpgraph prefix while retaining other cla
     return port
   }
 
-  for (const render of [() => view.onRender(), () => view.confirmUpdate(0)]) {
+  for (const render of [() => view.onRender(), () => view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))]) {
     view.el.querySelector('.bpgraph-port')?.remove()
     view.el.appendChild(makePort())
     render()
@@ -128,4 +128,23 @@ test('clicking a dropdown retains its overlay, selection writes values, and blan
   paper.appendChild(otherField)
   otherField.click()
   expect(paper.querySelector('[role="option"]')).toBeNull()
+})
+
+test('port editors wrap text, number, select, and boolean inputs in UI primitives', () => {
+  const stringEditor = mountEditor({ id: 'in-str', name: 'str', type: 'string' }, 'abc').editor
+  expect(stringEditor.querySelector('pf-field[size="xs"] input.bpgraph-port-field')).toBeTruthy()
+
+  const numberEditor = mountEditor({ id: 'in-num', name: 'num', type: 'number' }, 42).editor
+  expect(numberEditor.querySelector('pf-field[size="xs"] input.bpgraph-port-field')).toBeTruthy()
+  expect(numberEditor.querySelector('pf-field[size="xs"] svg[slot="suffix"].bpgraph-port-stepper')).toBeTruthy()
+
+  const selectEditor = mountEditor(
+    { id: 'in-sel', name: 'sel', type: 'string', editor: 'select', _options: [{ label: 'A', value: 'a' }] },
+    'a'
+  ).editor
+  expect(selectEditor.querySelector('pf-field[size="xs"] input.bpgraph-port-select')).toBeTruthy()
+  expect(selectEditor.querySelector('pf-field[size="xs"] svg[slot="suffix"].bpgraph-port-chevron')).toBeTruthy()
+
+  const boolEditor = mountEditor({ id: 'in-bool', name: 'bool', type: 'boolean' }, true).editor
+  expect(boolEditor.querySelector('pf-switch[size="sm"] input.bpgraph-port-checkbox')).toBeTruthy()
 })

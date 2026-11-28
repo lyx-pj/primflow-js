@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from 'vitest'
-import type { JsonGraph, JsonNode } from '@lyx-pj/primflow-model'
+import { ChangedEventType, type JsonGraph, type JsonNode } from '@lyx-pj/primflow-model'
 import type { NodeInstanceType } from '../src/Graph'
 import { SubgraphPreviewManager } from '../src/preview/SubgraphPreviewManager'
 import { buildPreview, type PreviewResult } from '../src/preview/previewGraph'
@@ -272,5 +272,44 @@ test('embedded regions never write to the application preview cache', async () =
 
   expect(adapter.save).not.toHaveBeenCalled()
   expect(adapter.remove).not.toHaveBeenCalled()
+})
+
+test('moving a container node in the parent graph does not invalidate its preview', async () => {
+  vi.mocked(buildPreview).mockResolvedValue(preview('live'))
+  const listeners = new Map<string, (event: unknown) => void>()
+  const graph = embeddedGraph()
+  graph.on = vi.fn((event: string, listener: (payload: unknown) => void) => {
+    listeners.set(event, listener)
+  }) as unknown as CanvasGraph['on']
+  const manager = new SubgraphPreviewManager(graph)
+  managers.push(manager)
+  const slot = mountSlot()
+  const container = callNode('body')
+
+  manager.attach(slot, container)
+  await vi.waitFor(() => expect(slot.getAttribute('data-preview-state')).toBe('ready'))
+  expect(buildPreview).toHaveBeenCalledTimes(1)
+
+  const onChanged = listeners.get('changed')
+  expect(onChanged).toBeDefined()
+
+  // Dragging the container node updates its position in the parent graph.
+  onChanged?.({
+    change: ChangedEventType.Property,
+    propertyName: 'position',
+    object: container,
+    oldValue: { x: 0, y: 0 },
+    newValue: { x: 100, y: 50 },
+  })
+  await Promise.resolve()
+  expect(buildPreview).toHaveBeenCalledTimes(1)
+
+  // Editing a node inside the embedded region still invalidates the preview.
+  onChanged?.({
+    change: ChangedEventType.Property,
+    propertyName: 'position',
+    object: { graphId: 'body' },
+  })
+  await vi.waitFor(() => expect(buildPreview).toHaveBeenCalledTimes(2))
 })
 

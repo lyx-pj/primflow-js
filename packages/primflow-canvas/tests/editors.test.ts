@@ -158,7 +158,7 @@ test('a custom port editor renders inside the port mount point', async () => {
   const { BlueprintNodeView } = await import('../src/adapters/joint/nodes/BlueprintNodeView')
   const view = new BlueprintNodeView({ model })
   view.findPortNode = () => editor
-  view.confirmUpdate(0)
+  view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))
 
   expect(editor.querySelector('.pick')).toBeTruthy()
   view.remove()
@@ -183,7 +183,7 @@ test('refreshing a value re-renders a registered custom port editor', async () =
   const { BlueprintNodeView } = await import('../src/adapters/joint/nodes/BlueprintNodeView')
   const view = new BlueprintNodeView({ model })
   view.findPortNode = () => editor
-  view.confirmUpdate(0)
+  view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))
   expect(editor.querySelector('.pick')?.textContent).toBe('pick')
 
   model.set('values', { asset: { assetId: 'a1', mediaType: 'image/png' } })
@@ -210,11 +210,65 @@ test('a data type without a registered editor keeps the built-in control', async
   const { BlueprintNodeView } = await import('../src/adapters/joint/nodes/BlueprintNodeView')
   const view = new BlueprintNodeView({ model })
   view.findPortNode = () => editor
-  view.confirmUpdate(0)
+  view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))
 
   expect(editor.querySelector('.pick')).toBeNull()
   expect(editor.querySelector('input')?.value).toBe('hello')
   view.remove()
+})
+
+test('a framework-agnostic mount port editor mounts, updates on value refresh, and destroys on view removal', async () => {
+  const graph = new dia.Graph()
+  const model = new dia.Element({
+    type: 'test.Node',
+    inputs: [{ id: 'in-asset', name: 'asset', type: 'media.image@1' }],
+    values: { asset: 'initial' },
+  })
+  let mounted = 0
+  let updated = 0
+  let destroyed = 0
+  const registry = new EditorRegistry()
+  registry.register('media.image@1', {
+    port: {
+      mount(container, ctx) {
+        mounted++
+        const btn = document.createElement('button')
+        btn.className = 'mounted-port'
+        btn.textContent = String(ctx.value ?? '')
+        container.appendChild(btn)
+        return {
+          update(next) {
+            updated++
+            btn.textContent = String(next.value ?? '')
+          },
+          destroy() {
+            destroyed++
+            btn.remove()
+          },
+        }
+      },
+    },
+  })
+  model.set('editors', registry)
+  graph.addCell(model)
+  const editor = document.createElement('div')
+  document.body.appendChild(editor)
+
+  const { BlueprintNodeView } = await import('../src/adapters/joint/nodes/BlueprintNodeView')
+  const view = new BlueprintNodeView({ model })
+  view.findPortNode = () => editor
+  view.confirmUpdate(view.getFlag(dia.ElementView.Flags.PORTS))
+  expect(mounted).toBe(1)
+  expect(editor.querySelector('.mounted-port')?.textContent).toBe('initial')
+
+  model.set('values', { asset: 'next' })
+  view.refreshDomValue('asset')
+  expect(mounted).toBe(1)
+  expect(updated).toBe(1)
+  expect(editor.querySelector('.mounted-port')?.textContent).toBe('next')
+
+  view.remove()
+  expect(destroyed).toBe(1)
 })
 
 test('a port of a custom type gets a mount point only when an editor is registered', async () => {

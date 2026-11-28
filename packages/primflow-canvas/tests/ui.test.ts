@@ -1741,6 +1741,29 @@ test('the overview shows an empty state without nodes', () => {
   expect(panel.querySelector('.bpgraph-node-panel-empty')?.textContent).toBe('No nodes in this view')
 })
 
+test('the overview refreshes when nodes are created, renamed, or removed', () => {
+  current = createHarness()
+  const panel = current.container.querySelector('.bpgraph-node-panel')!
+  const labels = () => [...panel.querySelectorAll<HTMLButtonElement>('.bpgraph-node-panel-overview-item')]
+    .map((item) => item.textContent?.trim())
+
+  expect(labels()).toEqual([])
+
+  const first = createNodeStub({ id: 'node-1', title: 'First' })
+  current.nodes.push(first)
+  current.emitGraph('node:created', [first], { type: 'added' })
+  expect(labels()).toEqual(['First'])
+
+  first.title = 'Renamed'
+  current.emitGraph('node:changed', first, 'title', 'First', 'Renamed')
+  expect(labels()).toEqual(['Renamed'])
+
+  current.nodes.length = 0
+  current.emitGraph('node:removed', [first], { type: 'removed' })
+  expect(labels()).toEqual([])
+  expect(panel.querySelector('.bpgraph-node-panel-empty')?.textContent).toBe('No nodes in this view')
+})
+
 test('tabs switch between node, overview, and global settings content', () => {
   current = createHarness({
     nodePanel: {

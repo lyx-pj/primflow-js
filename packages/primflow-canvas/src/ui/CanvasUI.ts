@@ -13,13 +13,17 @@ import { Minimap } from './components/Minimap'
 import { ExecutionEffects } from './components/ExecutionEffects'
 import { NodeExecutionPreview } from './components/NodeExecutionPreview'
 import { PortTooltip } from './components/PortTooltip'
+import { NodeFloatingBar, pickQuickAddPort } from './components/NodeFloatingBar'
+import { NodeWidgetBar } from './components/NodeWidgetBar'
 import { resolveSourcePort, type ConnectionSource } from './connectionTargets'
 import { COMPACT_UI_WIDTH, UI_GAP } from './layout'
 import type {
   CanvasGraph,
   ContextMenuOptions,
   DebugPanelOptions,
+  NodeFloatingBarOptions,
   NodePanelOptions,
+  NodeWidgetsOptions,
   PaletteOptions,
   ToolbarOptions,
 } from './types'
@@ -66,6 +70,8 @@ export class CanvasUI {
   private readonly executionEffects: ExecutionEffects
   private readonly executionPreview: NodeExecutionPreview
   private readonly portTooltip: PortTooltip
+  private readonly nodeFloatingBar: NodeFloatingBar
+  private readonly nodeWidgetBar: NodeWidgetBar
   private lastBlankRightClick = 0
   /** Latest blank right-button pointerdown, allowing double-click detection despite delayed contextmenu. */
   private lastRightPointerDown = 0
@@ -81,11 +87,42 @@ export class CanvasUI {
     this.graph = graph as unknown as CanvasGraph
     this.adapter = adapter
     this.paper = paper
-    this.overlay = new OverlayLayer(paper.el as HTMLElement)
-    this.replayBanner = new ReplayBanner(this.overlay, () => this.graph.exitReplay(), () => this.graph.options.language)
+    this.overlay = new OverlayLayer(paper.el as HTMLElement, this.graph.options.theme ?? 'dark')
+    this.replayBanner = new ReplayBanner(
+      this.overlay,
+      () => this.graph.exitReplay(),
+      () => this.graph.options.language,
+      this.graph
+    )
     this.executionEffects = new ExecutionEffects(this.overlay)
     this.executionPreview = new NodeExecutionPreview(this.graph, this.overlay)
-    this.portTooltip = new PortTooltip(this.overlay)
+    this.portTooltip = new PortTooltip(this.overlay, this.graph)
+    this.nodeWidgetBar = new NodeWidgetBar(
+      this.graph,
+      paper,
+      this.overlay,
+      () => this.nodeWidgetsOptions,
+      (node, direction) => this.openQuickAddFromNode(node, direction)
+    )
+    this.nodeFloatingBar = new NodeFloatingBar(
+      this.graph,
+      paper,
+      this.overlay,
+      () => this.nodeFloatingBarOptions,
+      {
+        openQuickAdd: (node, direction, triggerEl) => this.openQuickAddFromNode(node, direction, triggerEl),
+        inspectNode: (node) => {
+          this.prepareSelection(node)
+          this.openNodePanel()
+        },
+        selectOnly: (node) => this.prepareSelection(node),
+        canToggleWidgets: (node) => this.nodeWidgetBar.hasWidgetsFor(node),
+        isWidgetsOpen: (node) => this.nodeWidgetBar.isOpenFor(node),
+        openWidgets: (node) => this.nodeWidgetBar.openFor(node),
+        closeWidgets: () => this.nodeWidgetBar.close(),
+        toggleWidgets: (node) => this.nodeWidgetBar.toggleFor(node),
+      }
+    )
     this.refreshExecutionStatus()
     // Create the panels before the toolbar so initial visibility and pressed states match.
     this.debugPanel = new DebugPanel(this.graph, this.overlay, () => this.debugPanelOptions, this.onDebugPanelVisibility)
@@ -126,12 +163,35 @@ export class CanvasUI {
 
   refreshLanguage() {
     for (const component of [this.toolbar, this.zoomControls, this.minimap, this.panel,
-      this.debugPanel, this.replayBanner, this.palette, this.contextMenu, this.executionPreview]) {
+      this.debugPanel, this.replayBanner, this.palette, this.contextMenu, this.executionPreview,
+      this.nodeFloatingBar, this.nodeWidgetBar]) {
       component.refreshLanguage()
     }
     // Port labels come from the application, so a language refresh may rebuild
     // the ports under the pointer; drop the card instead of showing stale text.
     this.portTooltip.hide()
+  }
+
+  refreshTheme() {
+    this.overlay.setTheme(this.graph.options.theme ?? 'dark')
+  }
+
+  /** Re-evaluate every UI control after `ui` slots or floating widget options change. */
+  refreshAll() {
+    this.refreshTheme()
+    this.toolbar.refresh()
+    this.zoomControls.refresh()
+    this.minimap.refresh()
+    this.panel.refresh()
+    this.debugPanel.refresh()
+    this.replayBanner.refresh()
+    this.palette.refresh()
+    this.contextMenu.refresh()
+    this.portTooltip.refresh()
+    this.executionPreview.refresh()
+    this.nodeFloatingBar.refresh()
+    this.nodeWidgetBar.refresh()
+    this.syncPanelLayout()
   }
 
   refreshToolbar() {
@@ -143,6 +203,7 @@ export class CanvasUI {
     this.paper.el.setAttribute('data-execution-status', status)
     this.executionEffects.refresh(status)
     this.executionPreview.refresh()
+    this.nodeFloatingBar.refresh()
   }
 
   refreshNodeExecutionPreview(nodeId: string) {
@@ -213,6 +274,8 @@ export class CanvasUI {
     this.contextMenu.close()
     this.executionPreview.close()
     this.portTooltip.hide()
+    this.nodeFloatingBar.clear()
+    this.nodeWidgetBar.close()
   }
 
   destroy() {
@@ -238,7 +301,11 @@ export class CanvasUI {
     this.executionEffects.destroy()
     this.executionPreview.destroy()
     this.portTooltip.destroy()
+    this.nodeFloatingBar.destroy()
+    this.nodeWidgetBar.destroy()
     this.paper.el.removeAttribute('data-execution-status')
+    this.paper.el.removeAttribute('data-pf-theme')
+    ;(this.paper.el as HTMLElement).style.removeProperty('--bpgraph-right-inset')
     this.overlay.dispose()
   }
 
@@ -569,23 +636,30 @@ export class CanvasUI {
   private onNodeRemoved = () => {
     this.executionPreview.close()
     this.portTooltip.hide()
+    this.nodeFloatingBar.clear()
+    this.nodeWidgetBar.refresh()
   }
 
   private onNodeEnter = (node: NodeInstanceType | undefined) => {
     if (!node) return
     const view = this.paper.findViewByModel(node.id)
     if (view) this.executionPreview.open(node, view.el)
+    this.nodeFloatingBar.enterNode(node)
   }
 
   private onNodeLeave = (node: NodeInstanceType | undefined) => {
     if (!node) return
     this.executionPreview.leave(node)
+    this.nodeFloatingBar.leaveNode(node)
   }
 
   /** Entering a subgraph replaces canvas content, so the previous selection no longer applies. */
   private onSubgraphEnter = () => {
     this.palette.close()
     this.panel.setNode(null)
+    this.nodeFloatingBar.setSelectedNode(null)
+    this.nodeFloatingBar.clear()
+    this.nodeWidgetBar.setNode(null)
     this.executionPreview.close()
     this.portTooltip.hide()
   }
@@ -594,6 +668,9 @@ export class CanvasUI {
   private onSubgraphExit = () => {
     this.palette.close()
     this.panel.setNode(null)
+    this.nodeFloatingBar.setSelectedNode(null)
+    this.nodeFloatingBar.clear()
+    this.nodeWidgetBar.setNode(null)
     this.executionPreview.close()
     this.portTooltip.hide()
   }
@@ -630,6 +707,8 @@ export class CanvasUI {
   private onSelectionChanged = (selection: Array<NodeInstanceType | LinkInstanceType>) => {
     if (this.graph.isReplayMode()) {
       this.panel.setNode(null)
+      this.nodeFloatingBar.setSelectedNode(null)
+      this.nodeWidgetBar.setNode(null)
       return
     }
     this.syncNodePanelSelection(selection)
@@ -640,7 +719,39 @@ export class CanvasUI {
     const nodes = selection.filter((item): item is NodeInstanceType => {
       return this.adapter.findNode(item.id ?? '') === item
     })
-    this.panel.setNode(nodes.length === 1 ? nodes[0] : null)
+    const single = nodes.length === 1 ? nodes[0] : null
+    this.panel.setNode(single)
+    this.nodeWidgetBar.setNode(single)
+    this.nodeFloatingBar.setSelectedNode(single)
+  }
+
+  /** Open the filtered connection palette from a node's quick-add `+` button. */
+  private openQuickAddFromNode(node: NodeInstanceType, direction: 'in' | 'out', triggerEl?: HTMLElement) {
+    if (this.graph.isReplayMode() || !this.paletteOptions) return
+    const port = pickQuickAddPort(node, direction)
+    if (!port?.id) {
+      this.openPalette()
+      return
+    }
+    const view = this.paper.findViewByModel(node.id)
+    const rect = (triggerEl ?? view?.el)?.getBoundingClientRect()
+    const bounds = this.overlay.rect()
+    const offset = direction === 'out' ? 160 : -160
+    const clientX = rect
+      ? Math.max(bounds.left + 40, Math.min(rect.left + rect.width / 2 + offset, bounds.right - 40))
+      : bounds.left + bounds.width / 2
+    const clientY = rect ? rect.top + rect.height / 2 : bounds.top + bounds.height / 2
+    const localPoint = this.paper.clientToLocalPoint(clientX, clientY)
+    const pendingLinkId = this.adapter.createPendingLink(
+      { id: node.id, port: port.id },
+      localPoint
+    )
+    this.openConnectionPalette(
+      { node, port, direction },
+      undefined,
+      { x: clientX, y: clientY },
+      pendingLinkId
+    )
   }
 
   /** Select one overview node and center the viewport on it. */
@@ -695,11 +806,16 @@ export class CanvasUI {
       // The node panel exposes editable settings, which replay data does not allow.
       this.panel.close()
       this.panel.setNode(null)
+      this.nodeFloatingBar.setSelectedNode(null)
+      this.nodeFloatingBar.clear()
+      this.nodeWidgetBar.setNode(null)
       this.replayBanner.show(label)
     } else {
       this.paper.options.interactive = this.previousInteractive
       this.paper.el.removeAttribute('data-replay')
       this.replayBanner.hide()
+      this.nodeFloatingBar.refresh()
+      this.nodeWidgetBar.refresh()
     }
     this.adapter.refreshLinkEndpointTools()
     this.toolbar.refresh()
@@ -753,6 +869,9 @@ export class CanvasUI {
     this.panel.setOffset(offset)
     if (this.compact) {
       this.toolbar.setRightInset(0)
+      this.zoomControls.setRightInset(0)
+      ;(this.paper.el as HTMLElement).style.setProperty('--bpgraph-right-inset', '0px')
+      this.overlay.root.style.setProperty('--bpgraph-right-inset', '0px')
       return
     }
     const rootRect = this.overlay.rect()
@@ -765,10 +884,24 @@ export class CanvasUI {
     const debugInset = measurable && debugRect && debugRect.width > 0
       ? rootRect.right - debugRect.left
       : debugOpen ? UI_GAP + this.debugPanel.width : 0
-    this.toolbar.setRightInset(Math.max(nodeInset, debugInset))
+    const rightInset = Math.max(nodeInset, debugInset)
+    this.toolbar.setRightInset(rightInset)
+    this.zoomControls.setRightInset(rightInset)
+    ;(this.paper.el as HTMLElement).style.setProperty('--bpgraph-right-inset', `${rightInset}px`)
+    this.overlay.root.style.setProperty('--bpgraph-right-inset', `${rightInset}px`)
   }
 
   // ---- Configuration ----------------------------------------------------
+
+  private get nodeFloatingBarOptions(): NodeFloatingBarOptions | null {
+    const value = this.graph.options.nodeFloatingBar
+    return value === false ? null : typeof value === 'object' ? value : {}
+  }
+
+  private get nodeWidgetsOptions(): NodeWidgetsOptions | null {
+    const value = this.graph.options.nodeWidgets
+    return value === false ? null : typeof value === 'object' ? value : {}
+  }
 
   private get paletteOptions(): PaletteOptions | null {
     const value = this.graph.options.palette

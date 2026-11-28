@@ -34,16 +34,56 @@ export type {
 export { html, nothing, type TemplateResult } from 'lit-html'
 export { ref } from 'lit-html/directives/ref.js'
 
+export {
+  registerPrimitives,
+  PfSurface,
+  PfButton,
+  PfTooltip,
+  PfSwitch,
+  PfBadge,
+  PfDivider,
+  PfField,
+  type PfSurfaceVariant,
+  type PfSurfacePadding,
+  type PfButtonVariant,
+  type PfButtonSize,
+  type PfSwitchSize,
+  type PfBadgeTone,
+  type PfFieldSize,
+} from './ui/primitives'
+
 export type {
+  CanvasUIMountFn,
+  CanvasUIMountHandle,
+  CanvasUIMounter,
+  CanvasUIRenderer,
+  CanvasUISlot,
+} from './ui/slots'
+
+export type {
+  CanvasTheme,
   CanvasExecutionStatus,
+  CanvasUISlots,
+  BaseSlotContext,
   NodeExecutionData,
+  NodeFloatingAction,
+  NodeFloatingBarOptions,
+  NodeFloatingBarSlotContext,
+  NodeWidgetPlacement,
+  NodeWidgetContext,
+  NodeWidgetsOptions,
+  NodeWidgetBarSlotContext,
   PaletteOptions,
   PaletteItemDescription,
   PaletteEntry,
+  PaletteSlotItem,
+  PaletteSlotContext,
   ContextMenuOptions,
   ContextMenuItem,
   ContextMenuContext,
+  ContextMenuSlotContext,
   NodePanelOptions,
+  NodePanelSlotContext,
   PanelRenderContext,
   PanelOverviewContext,
   PanelGlobalSettingsContext,
@@ -52,6 +92,7 @@ export type {
   PanelSectionId,
   DebugPanelOptions,
   DebugPanelData,
+  DebugPanelSlotContext,
   DebugRecord,
   DebugRecordStatus,
   DebugLogEntry,
@@ -59,7 +100,17 @@ export type {
   DebugScope,
   ToolbarOptions,
   ToolbarAction,
-  ToolbarContext
+  ToolbarContext,
+  ToolbarSlotAction,
+  ToolbarSlotContext,
+  ZoomControlsSlotContext,
+  MinimapViewportRect,
+  MinimapNodeSnapshot,
+  MinimapLinkSnapshot,
+  MinimapSlotContext,
+  ReplayBannerSlotContext,
+  PortTooltipSlotContext,
+  NodeExecutionPreviewSlotContext,
 } from './ui/types'
 
 // Reexport model's public API from the canvas entry point.

@@ -12,6 +12,35 @@ export type NodeHeaderOptions = {
   ry?: number
 }
 
+let headerGradientSeq = 0
+
+function parseHexColor(color: string): [number, number, number] | null {
+  const hex = color.trim().replace(/^#/, '')
+  if (/^[0-9a-f]{3}$/i.test(hex)) {
+    return [
+      parseInt(hex[0] + hex[0], 16),
+      parseInt(hex[1] + hex[1], 16),
+      parseInt(hex[2] + hex[2], 16),
+    ]
+  }
+  if (/^[0-9a-f]{6}$/i.test(hex)) {
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+    ]
+  }
+  return null
+}
+
+function mixChannel(channel: number, target: number, amount: number) {
+  return Math.round(channel + (target - channel) * amount)
+}
+
+function mixHex(rgb: [number, number, number], target: number, amount: number) {
+  return `rgb(${mixChannel(rgb[0], target, amount)}, ${mixChannel(rgb[1], target, amount)}, ${mixChannel(rgb[2], target, amount)})`
+}
+
 /**
  * Draw the rounded node header.
  *
@@ -21,17 +50,16 @@ export type NodeHeaderOptions = {
 export function renderNodeHeader(g: SVGGElement, options: NodeHeaderOptions) {
   V(g).empty()
   const { title, size, style } = options
-  const rx = options.rx ?? 4
-  const ry = options.ry ?? 4
+  const rx = options.rx ?? 10
+  const ry = options.ry ?? 10
   const titleHeight = style.header?.height ?? 24
   const titleFontSize = style.header?.fontSize ?? 12
   const titleTop = style.header?.title?.y ?? 0
   const titleLeft = style.header?.title?.x ?? 0
   const textAlign = style.header?.textAlign ?? 'left'
   const markerSpace = options.breakpoint ? 20 : 0
-
-  const titlePath = V('path', {
-    d: `
+  const baseColor = style.header?.background ?? '#2b3240'
+  const headerPathD = `
       M0,${titleHeight}
       L0,${ry}
       Q0,0 ${rx},0
@@ -39,9 +67,45 @@ export function renderNodeHeader(g: SVGGElement, options: NodeHeaderOptions) {
       Q${size.width},0 ${size.width},${ry}
       L${size.width},${titleHeight}
       Z
-    `,
-    fill: style.header?.background ?? '#373C44',
+    `
+
+  const rgb = parseHexColor(baseColor)
+  let headerFill = baseColor
+  if (rgb) {
+    const gradientId = `bpgraph-header-grad-${++headerGradientSeq}`
+    const defs = V('defs')
+    const grad = V('linearGradient', { id: gradientId, x1: '0%', y1: '0%', x2: '100%', y2: '100%' })
+    grad.append(V('stop', { offset: '0%', 'stop-color': mixHex(rgb, 255, 0.22) }))
+    grad.append(V('stop', { offset: '48%', 'stop-color': baseColor }))
+    grad.append(V('stop', { offset: '100%', 'stop-color': mixHex(rgb, 0, 0.26) }))
+    defs.append(grad)
+    g.appendChild(defs.node)
+    headerFill = `url(#${gradientId})`
+  }
+
+  const titlePath = V('path', {
+    d: headerPathD,
+    fill: headerFill,
   }).node as SVGPathElement
+
+  const topHighlight = V('line', {
+    x1: rx,
+    y1: 0.5,
+    x2: Math.max(rx, size.width - rx),
+    y2: 0.5,
+    stroke: 'rgba(255, 255, 255, 0.26)',
+    'stroke-width': 1,
+    'pointer-events': 'none',
+  }).node as SVGLineElement
+
+  const divider = V('line', {
+    x1: 0,
+    y1: titleHeight,
+    x2: size.width,
+    y2: titleHeight,
+    stroke: 'rgba(255, 255, 255, 0.14)',
+    'stroke-width': 1,
+  }).node as SVGLineElement
 
   const textAnchor = textAlign === 'left' ? 'start' : textAlign === 'right' ? 'end' : 'middle'
   let startX = 0
@@ -59,13 +123,16 @@ export function renderNodeHeader(g: SVGGElement, options: NodeHeaderOptions) {
   const text = V('text', {
     x: startX + titleLeft,
     y: titleHeight / 2 + titleFontSize / 2 - 3 + titleTop,
-    fill: '#fff',
+    fill: style.header?.color ?? '#f8fafc',
     fontSize: titleFontSize,
+    fontWeight: 600,
     textAnchor,
   }).node as SVGTextElement
   text.textContent = title
 
   g.appendChild(titlePath)
+  g.appendChild(topHighlight)
+  g.appendChild(divider)
   g.appendChild(text)
   if (options.breakpoint) {
     const marker = V('svg', {

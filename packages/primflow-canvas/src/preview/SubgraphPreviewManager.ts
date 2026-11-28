@@ -155,7 +155,12 @@ export class SubgraphPreviewManager {
     if (existing) {
       if (existing.targetId === (targetId ?? '')) {
         existing.node = node
-        this.observe(existing)
+        const nextObserverTarget = slot.closest('g') ?? slot
+        if (existing.observerTarget !== nextObserverTarget) {
+          this.observer?.unobserve(existing.observerTarget)
+          existing.observerTarget = nextObserverTarget
+          this.observe(existing)
+        }
         this.renderSlot(existing)
         return
       }
@@ -258,6 +263,7 @@ export class SubgraphPreviewManager {
 
   private readonly onGraphChanged = (event: {
     change?: ChangedEventType
+    propertyName?: string
     object?: unknown
     newValue?: unknown
     oldValue?: unknown
@@ -266,7 +272,16 @@ export class SubgraphPreviewManager {
       this.detachNodes(event.object)
       this.detachNodes(event.oldValue)
     }
-    if (this.touchesRegion(event.object) || this.touchesRegion(event.newValue) || this.touchesRegion(event.oldValue)) {
+    // Moving or renaming a container node in the parent graph does not modify
+    // its embedded region; only consider `targetGraphId` when a container is
+    // inserted or its target binding changes.
+    const includeTargetBinding =
+      event.change === ChangedEventType.Insert || event.propertyName === 'targetGraphId'
+    if (
+      this.touchesRegion(event.object, includeTargetBinding) ||
+      this.touchesRegion(event.newValue, includeTargetBinding) ||
+      this.touchesRegion(event.oldValue, includeTargetBinding)
+    ) {
       this.invalidate()
     }
   }
@@ -280,12 +295,12 @@ export class SubgraphPreviewManager {
     }
   }
 
-  private touchesRegion(value: unknown): boolean {
-    if (Array.isArray(value)) return value.some((item) => this.touchesRegion(item))
+  private touchesRegion(value: unknown, includeTargetBinding: boolean): boolean {
+    if (Array.isArray(value)) return value.some((item) => this.touchesRegion(item, includeTargetBinding))
     const item = value as { graphId?: string; targetGraphId?: string } | null
     // A newly added container node creates its region in the same task, after
     // its card first attached; invalidate so the new source reaches the card.
-    if (item?.targetGraphId && this.graph.model.hasSubgraph(item.targetGraphId)) return true
+    if (includeTargetBinding && item?.targetGraphId && this.graph.model.hasSubgraph(item.targetGraphId)) return true
     return Boolean(item?.graphId && this.graph.model.hasSubgraph(item.graphId))
   }
 
