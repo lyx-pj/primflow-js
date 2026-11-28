@@ -89,11 +89,14 @@ checkImports('primflow-canvas', (spec) => {
   if (spec === '@lyx-pj/primflow-model') return null
   if (spec.startsWith('@lyx-pj/primflow-model/')) return '请从 model 的根入口导入，避免深层路径'
   if (spec === '@joint/core') return null
+  if (spec === 'lit' || spec.startsWith('lit/') || spec.startsWith('@lit/')) return null
   if (spec === 'lit-html' || spec.startsWith('lit-html/')) return null
+  if (spec === '@floating-ui/dom' || spec.startsWith('@floating-ui/')) return null
+  if (spec === '@shoelace-style/shoelace' || spec.startsWith('@shoelace-style/shoelace/')) return null
   if (spec.startsWith('@codemirror/')) return null
   if (spec.startsWith('@lezer/')) return null
   if (spec.startsWith('@lyx-pj/primflow-engine')) return 'canvas 不得依赖 engine（否则运行时状态会渗进画布层）'
-  return 'canvas 只能依赖 model、@joint/core、lit-html、@codemirror/* 与 @lezer/*'
+  return 'canvas 只能依赖 model、@joint/core、lit、lit-html、@floating-ui/dom、@shoelace-style/shoelace、@codemirror/* 与 @lezer/*'
 })
 
 checkImports('primflow-react', (spec) => {
@@ -179,14 +182,22 @@ checkBundle('primflow-canvas', 'build/index.mjs', (code) => {
   const specs = externalImports(code)
   record(specs.includes('@lyx-pj/primflow-model'), 'canvas 产物把 model 作为外部依赖引用')
   record(specs.includes('@joint/core'), 'canvas 产物把 @joint/core 作为外部依赖引用')
-  record(specs.some((s) => s === 'lit-html' || s.startsWith('lit-html/')), 'canvas 产物把 lit-html 作为外部依赖引用')
+  record(specs.some((s) => s === 'lit' || s.startsWith('lit/') || s === 'lit-html' || s.startsWith('lit-html/')), 'canvas 产物把 lit / lit-html 作为外部依赖引用')
+  record(specs.some((s) => s === '@floating-ui/dom' || s.startsWith('@floating-ui/')), 'canvas 产物把 @floating-ui/dom 作为外部依赖引用')
   record(specs.some((s) => s.startsWith('@codemirror/')), 'canvas 产物把 @codemirror/* 作为外部依赖引用')
   const unexpected = specs.filter(
     (s) =>
       s !== '@lyx-pj/primflow-model' &&
       s !== '@joint/core' &&
+      s !== 'lit' &&
+      !s.startsWith('lit/') &&
+      !s.startsWith('@lit/') &&
       s !== 'lit-html' &&
       !s.startsWith('lit-html/') &&
+      s !== '@floating-ui/dom' &&
+      !s.startsWith('@floating-ui/') &&
+      s !== '@shoelace-style/shoelace' &&
+      !s.startsWith('@shoelace-style/shoelace/') &&
       !s.startsWith('@codemirror/') &&
       !s.startsWith('@lezer/')
   )
